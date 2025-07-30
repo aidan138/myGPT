@@ -25,7 +25,6 @@ class BaseTokenizer(Tokenizer):
         super().__init__()
 
     def train(self, text: str, num_merges: int) -> None:
-
         ids = [b for b in text.encode('utf-8')] # text bytes as ints
         merges = {} # will contain all merges
         vocab = {i: bytes[i] for i in range(256)} # will map all tokens to their byte representations
@@ -47,3 +46,23 @@ class BaseTokenizer(Tokenizer):
         # Update the models lists
         self.vocab = vocab
         self.merges = merges
+    
+    def encode(self, text: str) -> list[int]:
+        ids = [b for b in text.encode('utf-8')]
+        while len(ids) <= 2:
+
+            stats = get_stats(ids) # Get the frequency for every pair
+            merge_pair = min(stats.items(), key=lambda kv: self.merges.get(kv[0], float('inf')))[0]
+
+            # Check if the returned merge pair exists
+            if merge_pair not in self.merges:
+                break
+            
+            ids = merge(ids, merge_pair, self.merges[merge_pair])
+
+        return ids
+
+    def decode(self, ids: list[int]) -> str:
+        byte_ids = b''.join(self.vocab[i] for i in ids)
+        return byte_ids.decode('utf-8')
+        
