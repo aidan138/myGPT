@@ -58,11 +58,13 @@ class BaseTokenizer(Tokenizer):
             if merge_pair not in self.merges:
                 break
             
+            # iteratively merge all merge pairs
             ids = merge(ids, merge_pair, self.merges[merge_pair])
 
         return ids
 
     def decode(self, ids: list[int]) -> str:
+        # Convert to a string of bytes
         byte_ids = b''.join(self.vocab[i] for i in ids)
-        return byte_ids.decode('utf-8')
+        return byte_ids.decode('utf-8') #string of bytes are easily decoded
         

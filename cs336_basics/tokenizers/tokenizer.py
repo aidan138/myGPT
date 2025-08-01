@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 class Tokenizer(ABC):
 
     def __init__(self):
-        self.merges = {} # token -> (token, token)
+        self.merges = {} # (token, token) -> token
         self.vocab = {i: bytes([i]) for i in range(256)} # int to bytes
         self.current_token = 256
 

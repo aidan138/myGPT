@@ -38,6 +38,7 @@ pip-delete-this-directory.txt
 
 # Datasets
 data/
+cs336_basics\tokenizers\helper_functions.py
 
 # Unit test / coverage reports
 htmlcov/
