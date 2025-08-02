@@ -66,17 +66,10 @@ def get_stats(parent: Pretoken, stats: dict[tuple, int] = {}, bp_to_pt: dict[tup
         bp_to_pt[id_pair].add(parent)
     return stats
 
-def handle_reduction(pair, freq, byte_freqs, bp_to_pt, parent):
-  byte_freqs[pair] -= freq
 
-
-def handle_addition(pair, freq, byte_freqs, bp_to_pt, parent):
-  byte_freqs[pair] = byte_freqs.get(pair, 0) + freq
-  bp_to_pt[pair].add(parent)
 
 def count_chunk(args) -> Counter:
   input_path, start, end, spec_token_pattern = args
-  print(f"working on chunk {start} - {end}")
   with open(input_path, 'rb') as f:
     # Read the chunk from the file
     f.seek(start)
@@ -88,8 +81,6 @@ def count_chunk(args) -> Counter:
   for document in documents:
     split_pretokens = re.finditer(PAT, document)
     pretoken_counts += Counter(tuple(pretoken.group().encode('utf-8')) for pretoken in split_pretokens)
-    #print(pretoken_counts)
-  print(f"Finished counting chunk {start} - {end}")
 
   return pretoken_counts
 
@@ -98,13 +89,13 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]):
   special_tok_pattern = '|'.join(re.escape(tok) for tok in special_tokens)
   special_start = vocab_size - len(special_tokens)
   special_token_dict = {special_start: special_tokens[i].encode('utf-8') for i in range(len(special_tokens))}
+  start_time = time.perf_counter()
 
   with open(input_path, 'rb') as f:
     num_processes = cpu_count()
     chunk_boundaries = find_chunk_boundaries(f, num_processes, special_tokens[0].encode('utf-8'))
 
   pretoken_counts = Counter()
-  print(f"Starting ")
   with concurrent.futures.ProcessPoolExecutor() as executor:
     arguments = [
       (input_path, chunk_boundaries[i], chunk_boundaries[i+1], special_tok_pattern) for i in range(len(chunk_boundaries)-1)
@@ -130,18 +121,40 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]):
 
   # Establish return values
   vocab = {i: bytes([i]) for i in range(256)} | special_token_dict  # Token: bytes representation
-  merges = {} # (token, token) -> token
+  merges = {} # (byte, byte) -> merge_byte
 
   # Main merge loop
   for _ in range(num_merges):
-
     while heap:
-      neg_freq, neg_pair = heapq.heappop(heap)
+      # TODO Optimize the tie breaks by refactoring datastructures to use bytes
+
+      # Tie break: Choose the token pair whose bytes are lexicographically largest
+      neg_freq0, neg_pair0 = heapq.heappop(heap)
+
+      # Gather all the others with the same neg_freq
+      same_freq = [(neg_freq0, neg_pair0)]
+      while heap and heap[0][0] == neg_freq0:
+          same_freq.append(heapq.heappop(heap))
+
+      # Tie break sequence
+      best = max(
+          same_freq,
+          key=lambda freq_pair: (
+              vocab[-freq_pair[1][0]],
+              vocab[-freq_pair[1][1]]
+          )
+      )
+
+      # Push extraneous same frequencies back
+      for item in same_freq:
+          if item is not best:
+              heapq.heappush(heap, item)
+
+      neg_freq, neg_pair = best
       pair = tuple(-x for x in neg_pair)
 
       # Check for a valid merge
       if neg_freq != 0 and pair in byte_freqs and -neg_freq == byte_freqs[pair]:
-        
         vocab[current_token] = vocab[pair[0]] + vocab[pair[1]]
         merges[pair] = current_token
 
@@ -153,34 +166,30 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]):
           reduced_pairs, new_pairs = parent.merge(pair, current_token)
 
           for mod_pair, mod_freq in reduced_pairs.items():
-            handle_reduction(mod_pair, mod_freq, byte_freqs, bp_to_pt, parent)
+            byte_freqs[mod_pair] -= mod_freq
             heapq.heappush(heap, (-byte_freqs[mod_pair], tuple(-x for x in mod_pair)))
 
           for mod_pair, mod_freq in new_pairs.items():
-            handle_addition(mod_pair, mod_freq, byte_freqs, bp_to_pt, parent)
+            byte_freqs[mod_pair] = byte_freqs.get(mod_pair, 0) + mod_freq
+            bp_to_pt[mod_pair].add(parent)
             heapq.heappush(heap, (-byte_freqs[mod_pair], tuple(-x for x in mod_pair)))
 
         current_token += 1
         break
+  end_time = time.perf_counter()
+  print(f"Full tokenization time {end_time - start_time}")
   
-  for k, v in merges.items():
-    try:
-        a = vocab[k[0]].decode('utf-8')
-    except UnicodeDecodeError:
-        a = str(vocab[k[0]])
-    try:
-        b = vocab[k[1]].decode('utf-8')
-    except UnicodeDecodeError:
-        b = str(vocab[k[1]])
-    try:
-        ab = vocab[v].decode('utf-8')
-    except UnicodeDecodeError:
-        ab = str(vocab[v])
-    print(f"{a}<|merged|>{b} -> {ab} ({v})")
+  # The more helpful merge representation, not used to match industry standard
+  # Could be used in later implementations
+  real_merges = merges 
 
-  return vocab, merges 
+  merges = [(vocab[key[0]], vocab[key[1]]) for key in merges.keys()]
+    
+
+  return vocab, merges
 
 
 
 if __name__ == "__main__":
-  train_bpe("data\TinyStoriesV2-GPT4-valid.txt", 500 , ['<|endoftext|>'])
+  vocab, merges = train_bpe("tests/fixtures/tinystories_sample.txt", 20000, ['<|endoftext|>'])
+  print(len(vocab))
