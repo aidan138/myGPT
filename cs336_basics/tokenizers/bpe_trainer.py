@@ -7,6 +7,10 @@ from cs336_basics.pretokenization_example import find_chunk_boundaries
 from multiprocessing import cpu_count
 import concurrent.futures
 import time
+import pickle
+from pathlib import Path
+import cProfile
+import pstats
 
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
@@ -92,10 +96,15 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]):
   special_token_dict = {special_start: special_tokens[i].encode('utf-8') for i in range(len(special_tokens))}
   start_time = time.perf_counter()
 
+  start_cb_t = time.perf_counter()
   with open(input_path, 'rb') as f:
     num_processes = cpu_count()
     chunk_boundaries = find_chunk_boundaries(f, num_processes, special_tokens[0].encode('utf-8'))
+  end_cb_t = time.perf_counter()
 
+  print(f"Finished getting chunk boundaries in {end_cb_t-start_cb_t}")
+
+  start_pt_t = time.perf_counter()
   pretoken_counts = Counter()
   with concurrent.futures.ProcessPoolExecutor() as executor:
     arguments = [
@@ -105,7 +114,10 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]):
     results = [executor.submit(count_chunk, arg) for arg in arguments]
     for f in concurrent.futures.as_completed(results):
       pretoken_counts += f.result()
-    
+  end_pt_t = time.perf_counter()
+  print(f"Finished counting chunks in {end_pt_t-start_pt_t}")
+
+  start_tok_t = time.perf_counter()
   pretokens = [Pretoken(tok, freq) for tok, freq in pretoken_counts.items()]
   byte_freqs = {} # byte_pair : freq
   bp_to_pt = defaultdict(set)# byte_pair : set(parent Pretokens)
@@ -178,6 +190,7 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]):
         current_token += 1
         break
   end_time = time.perf_counter()
+  print(f"Finished merging in {end_time - start_tok_t}")
   print(f"Full tokenization time {end_time - start_time}")
   
   # The more helpful merge representation, not used to match industry standard
@@ -187,3 +200,34 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]):
   merges = [(vocab[key[0]], vocab[key[1]]) for key in merges.keys()]
     
   return vocab, merges
+
+if __name__ == '__main__':
+
+  profiler = cProfile.Profile()
+  profiler.enable()
+  vocab, merges = train_bpe(r'data\TinyStoriesV2-GPT4-train.txt', 10000, ["<|endoftext|>"])
+  profiler.disable()
+  stats = pstats.Stats(profiler)
+  stats.sort_stats("cumtime").print_stats(20)  # top 20 cumulative time functions
+
+  bpe_name = input("Input the bpe name: ")
+  file_dir = 'trained_bpes'
+  current_dir = Path(__file__).resolve().parent
+  file_dir_path = current_dir / file_dir
+
+  file_dir_path.mkdir(exist_ok=True)
+  
+  filename = f"{bpe_name}_vocab.pkl"
+  filepath = file_dir_path / filename
+
+  with open(filepath, 'wb') as f:
+    pickle.dump(vocab, f)
+  
+  filename = f"{bpe_name}_merges.pkl"
+  filepath = file_dir_path / filename
+  with open(filepath, 'wb') as f:
+    pickle.dump(merges, f)
+  
+  # Print out relevant stats
+  print(f"The longest token is: {max(vocab.values(), key= lambda v: len(v))}")
+  
