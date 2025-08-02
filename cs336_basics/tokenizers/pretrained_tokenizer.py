@@ -3,7 +3,7 @@ from cs336_basics.tokenizers.tokenizer import Tokenizer
 import json
 from typing import Iterable, Iterator
 import regex as re
-from multiprocessing import cpu_count
+import pickle
 
 
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
@@ -59,18 +59,34 @@ class PretrainedTokenizer(Tokenizer):
 
     @classmethod
     def from_files(cls, vocab_filepath: str, merges_filepath: str, special_tokens: list[str] | None = None):
-        with open(vocab_filepath, 'r') as f:
-            raw_vocab = json.load(f)
-            vocab = {token: str_byte.encode('utf-8') for str_byte, token in raw_vocab.items()}
-            
-        merges = []
-        with open(merges_filepath, 'r', encoding="utf-8") as f:
-            lines = f.readlines()
-            for line in lines:
-                pair = line.strip().split(' ')
-                tok1, tok2 = pair[0], pair[1]
-                merges.append(tuple((tok1.encode('utf-8'), tok2.encode('utf-8'))))
+
+        if vocab_filepath.endswith('.json'):
+            with open(vocab_filepath, 'r') as f:
+                raw_vocab = json.load(f)
+                vocab = {token: str_byte.encode('utf-8') for str_byte, token in raw_vocab.items()}
+
+        elif vocab_filepath.endswith('.pkl'):
+            with open(vocab_filepath, 'rb') as f:
+                vocab = pickle.load(f)
+        else:
+            raise NotImplementedError
+
+        if merges_filepath.endswith('.txt'):
+            merges = []
+            with open(merges_filepath, 'r', encoding="utf-8") as f:
+                lines = f.readlines()
+                for line in lines:
+                    pair = line.strip().split(' ')
+                    tok1, tok2 = pair[0], pair[1]
+                    merges.append(tuple((tok1.encode('utf-8'), tok2.encode('utf-8'))))
+        elif merges_filepath.endswith('.pkl'):
+            with open(merges_filepath, 'rb') as f:
+                merges = pickle.load(f)
         
+        else:
+            raise NotImplementedError
+
+            
         return PretrainedTokenizer(vocab, merges, special_tokens)
 
 
