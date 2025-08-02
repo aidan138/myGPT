@@ -74,6 +74,7 @@ def count_chunk(args) -> Counter:
     # Read the chunk from the file
     f.seek(start)
     chunk = f.read(end-start).decode('utf-8', errors='ignore')
+  chunk = chunk.replace('\r\n', '\n').replace('\r', '\n')
 
   # Removes the last item if ends on a special token
   pretoken_counts = Counter()
@@ -185,11 +186,4 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]):
 
   merges = [(vocab[key[0]], vocab[key[1]]) for key in merges.keys()]
     
-
   return vocab, merges
-
-
-
-if __name__ == "__main__":
-  vocab, merges = train_bpe("tests/fixtures/tinystories_sample.txt", 20000, ['<|endoftext|>'])
-  print(len(vocab))
