@@ -126,7 +126,7 @@ class PretrainedTokenizer(Tokenizer):
 
 
     def decode(self, ids: list[int]) -> str:
-        byte_txt = b''.join(self.vocab[id] for id in ids)
+        byte_txt = b''.join(self.vocab[id] if id in self.vocab else b'\xEF\xBF\xBD' for id in ids)
         return byte_txt.decode('utf-8', errors='replace')
 
     def train(self):
