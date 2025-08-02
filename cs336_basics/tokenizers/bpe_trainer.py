@@ -71,7 +71,6 @@ def get_stats(parent: Pretoken, stats: dict[tuple, int] = {}, bp_to_pt: dict[tup
     return stats
 
 
-
 def count_chunk(args) -> Counter:
   input_path, start, end, spec_token_pattern = args
   with open(input_path, 'rb') as f:
@@ -208,6 +207,7 @@ if __name__ == '__main__':
   vocab, merges = train_bpe(r'data\TinyStoriesV2-GPT4-train.txt', 10000, ["<|endoftext|>"])
   profiler.disable()
   stats = pstats.Stats(profiler)
+  profiler.dump_stats("train_bpe_profile.prof")
   stats.sort_stats("cumtime").print_stats(20)  # top 20 cumulative time functions
 
   bpe_name = input("Input the bpe name: ")
