@@ -4,8 +4,8 @@ from collections import Counter
 import heapq
 import regex as re
 from cs336_basics.pretokenization_example import find_chunk_boundaries
-from multiprocessing import cpu_count
-import concurrent.futures
+from multiprocessing import cpu_count, Pool
+import mmap
 import time
 import pickle
 from pathlib import Path
@@ -73,10 +73,10 @@ def get_stats(parent: Pretoken, stats: dict[tuple, int] = {}, bp_to_pt: dict[tup
 
 def count_chunk(args) -> Counter:
   input_path, start, end, spec_token_pattern = args
-  with open(input_path, 'rb') as f:
-    # Read the chunk from the file
-    f.seek(start)
-    chunk = f.read(end-start).decode('utf-8', errors='ignore')
+  with open(input_path, 'rb') as f, \
+    mmap.mmap(f.fileno(), length=0, access=mmap.ACCESS_READ) as mm:
+    # Read the chunk from disk memory
+    chunk = mm[start:end].decode('utf-8', errors='ignore')
   chunk = chunk.replace('\r\n', '\n').replace('\r', '\n')
 
   # Removes the last item if ends on a special token
@@ -105,14 +105,15 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]):
 
   start_pt_t = time.perf_counter()
   pretoken_counts = Counter()
-  with concurrent.futures.ProcessPoolExecutor() as executor:
-    arguments = [
+  arguments = [
       (input_path, chunk_boundaries[i], chunk_boundaries[i+1], special_tok_pattern) for i in range(len(chunk_boundaries)-1)
     ]
-
-    results = [executor.submit(count_chunk, arg) for arg in arguments]
-    for f in concurrent.futures.as_completed(results):
-      pretoken_counts += f.result()
+  
+  with Pool() as pool:
+    results = pool.map(count_chunk, arguments)
+  
+  for result in results:
+    pretoken_counts.update(result)
   end_pt_t = time.perf_counter()
   print(f"Finished counting chunks in {end_pt_t-start_pt_t}")
 
