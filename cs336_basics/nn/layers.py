@@ -47,3 +47,22 @@ class Embedding(nn.Module):
     def forward(self, token_ids: Tensor):
         return self.embeddings[token_ids]
     
+
+class RMSNorm(nn.Module):
+    
+    def __init__(self, d_model: int, epsilon: float=1e-5, device = None, dtype= None):
+        super().__init__()
+        dtype = torch.float32 if dtype is None else dtype
+        # TODO Look into if they ever use running mean
+        self.gain = nn.Parameter(torch.ones(d_model))
+        self.epsilon = epsilon
+
+    def forward(self, x: Tensor) -> Tensor:
+        B, N, D = x.shape
+        assert D == self.gain.shape[0]
+        square_sum_x = (x.square() + self.epsilon).sum(-1, keepdim=True) # B, N, 1
+        rms_x = (square_sum_x / D).sqrt() # B, N, 1 
+        # rms_x will be broadcasted across the feature dim and gain will be broadcasted across batch and sequence dims
+        rms_norm_x = (x / rms_x) * self.gain # Element wise multiply and division
+        return rms_norm_x
+        
