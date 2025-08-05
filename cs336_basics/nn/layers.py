@@ -52,7 +52,7 @@ class RMSNorm(nn.Module):
     def __init__(self, d_model: int, epsilon: float=1e-5, device = None, dtype= None):
         super().__init__()
         dtype = torch.float32 if dtype is None else dtype
-        # TODO Look into if they ever use running mean
+        # TODO Look into if they use running mean
         self.gain = nn.Parameter(torch.ones(d_model))
         self.epsilon = epsilon
 
@@ -94,4 +94,36 @@ class SwiGLU_Feedforward(nn.Module):
         x_silu = silu(xpreact)
         x_swiglu = x_silu * x_gate # Apply the linear transform gate
         return self.linears['W2'](x_swiglu)
+
+
+
+
+class RoPE(nn.Module):
+
+    def __init__(self, theta: float, d_k: int, max_seq_len: int, device: torch.device = None):
+        super().__init__()
+        assert d_k % 2 == 0, "Input dim must be divisible by 2"
+        self.sin, self.cos= self._compute_theta_mat(theta, d_k, max_seq_len, device)
+
+    def _compute_theta_mat(self, theta: float, d_k: int, max_seq_len: int, device: torch.device):
+        angle_vals = [
+            i/(theta**(2*k/d_k)) for i in range(max_seq_len) for k in range(0, d_k//2)
+        ]
+
+        angle_vals = torch.Tensor(angle_vals).view((max_seq_len, d_k//2, -1)).to(device) # N, D/2, 1
+        sin, cos = angle_vals.sin(), angle_vals.cos() # N, D/2, 1 for both
+        return sin, cos
+
+    def forward(self, x: Tensor, token_positions: torch.Tensor):
+        *batch_dim, N, D = x.shape # Handle arbitrary batch dims
+        x = x.view((*batch_dim, N, D//2, 2)).unsqueeze(-1) # B, N, D/2, 2, 1
+        sin, cos = self.sin[token_positions], self.cos[token_positions] # N, D/2, 1
+        R_mats = torch.stack( # N, D/2, 2 -> N, D/2, 2, 2
+            (torch.concat([cos, -sin], dim=-1),
+             torch.concat([sin, cos], dim=-1)), dim=-2
+        ) 
+        
+        for _ in batch_dim:
+            R_mats = R_mats.unsqueeze(0) # 1*B, N, D/2, 2,2
+        return (R_mats @ x).squeeze(-1).view(*batch_dim, N, D)
 
