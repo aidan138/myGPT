@@ -10,7 +10,7 @@ import torch
 from torch import Tensor
 from cs336_basics.tokenizers.bpe_trainer import train_bpe
 from cs336_basics.tokenizers.pretrained_tokenizer import PretrainedTokenizer
-from cs336_basics.nn.layers import Linear, Embedding, RMSNorm, silu, SwiGLU_Feedforward, RoPE, Multiheaded_Self_Attention
+from cs336_basics.nn.layers import Linear, Embedding, RMSNorm, silu, SwiGLU_Feedforward, RoPE, Multiheaded_Self_Attention, Parallel_Multiheaded_Self_Attention
 from cs336_basics.nn.utils import softmax, sdp_attention
 
 
@@ -196,7 +196,7 @@ def run_multihead_self_attention_with_rope(
     """
     batch_size, seq_len, d_model = in_features.shape
     rope = RoPE(theta, d_model//num_heads, seq_len)
-    mha = Multiheaded_Self_Attention(d_model, num_heads, positional_embeddings=rope)
+    mha = Parallel_Multiheaded_Self_Attention(d_model, num_heads, positional_embeddings=rope)
     mha.Q.W.data = q_proj_weight
     mha.K.W .data= k_proj_weight
     mha.V.W.data = v_proj_weight
