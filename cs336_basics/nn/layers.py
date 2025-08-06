@@ -1,6 +1,7 @@
 import torch
 from torch import nn, Tensor
 import math
+from cs336_basics.nn.utils import softmax, sdp_attention
 
 class Linear(nn.Module):
     """
@@ -117,13 +118,46 @@ class RoPE(nn.Module):
     def forward(self, x: Tensor, token_positions: torch.Tensor):
         *batch_dim, N, D = x.shape # Handle arbitrary batch dims
         x = x.view((*batch_dim, N, D//2, 2)).unsqueeze(-1) # B, N, D/2, 2, 1
-        sin, cos = self.sin[token_positions], self.cos[token_positions] # N, D/2, 1
-        R_mats = torch.stack( # N, D/2, 2 -> N, D/2, 2, 2
+
+        if token_positions is not None:
+            sin, cos = self.sin[token_positions], self.cos[token_positions] # N, D/2, 1
+        else:
+            sin, cos = self.sin, self.cos
+        R_mats = torch.stack( # seq_len, d_features/2,  -> seq_len, features_2/2, 2, 2
             (torch.concat([cos, -sin], dim=-1),
              torch.concat([sin, cos], dim=-1)), dim=-2
         ) 
-        
         for _ in batch_dim:
             R_mats = R_mats.unsqueeze(0) # 1*B, N, D/2, 2,2
         return (R_mats @ x).squeeze(-1).view(*batch_dim, N, D)
+
+class Multiheaded_Self_Attention(nn.Module):
+
+    def __init__(self, d_model: int, num_heads: int, max_seq_length: int = 0, positional_embeddings: RoPE = None):
+        assert d_model % num_heads == 0, 'Model features must be divisible by number of heads'
+        super().__init__()
+        self.num_heads = num_heads
+        self.Q = Linear(d_model, d_model)
+        self.K = Linear(d_model, d_model)
+        self.V = Linear(d_model, d_model)
+        self.WO = Linear(d_model, d_model)
+        self.RoPE = positional_embeddings
+
+    def forward(self, x: Tensor, token_positions: Tensor | None = None):
+        batch_size, seq_len, d_model = x.shape
+        # We get an output from the matmul of batch_size, seq_len, num_heads * head_dim
+        # We then view for batch_size, seq_len, num_heads, head_dim
+        # Finally permute the head dim to the front so that you are processing all heads in parallel as if separate modules
+        query = self.Q(x).view(batch_size, seq_len, self.num_heads, -1).permute((2, 0, 1, 3))
+        key = self.K(x).view(batch_size, seq_len, self.num_heads, -1).permute((2, 0, 1, 3))
+        value = self.V(x).view(batch_size, seq_len, self.num_heads, -1).permute((2, 0, 1, 3))
+        # Apply positional embeddings if applicable
+        if self.RoPE is not None:
+            query = self.RoPE(query, token_positions)
+            key = self.RoPE(key, token_positions)
+        mask_shape = (*query.shape[:-1], key.shape[-2]) # ..., N, M
+        mask = torch.full(mask_shape, True).tril()
+        attended = sdp_attention(query, key, value, mask = mask) # Apply attention -> num_heads, batch, seq_len, head_dim
+        attended = attended.permute(1, 2, 0, 3).reshape(batch_size, seq_len, -1) # undo the permutation
+        return self.WO(attended).view(batch_size, seq_len, d_model)
 

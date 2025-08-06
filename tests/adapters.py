@@ -10,8 +10,8 @@ import torch
 from torch import Tensor
 from cs336_basics.tokenizers.bpe_trainer import train_bpe
 from cs336_basics.tokenizers.pretrained_tokenizer import PretrainedTokenizer
-from cs336_basics.nn.layers import Linear, Embedding, RMSNorm, silu, SwiGLU_Feedforward, RoPE
-from cs336_basics.nn.utils import softmax
+from cs336_basics.nn.layers import Linear, Embedding, RMSNorm, silu, SwiGLU_Feedforward, RoPE, Multiheaded_Self_Attention
+from cs336_basics.nn.utils import softmax, sdp_attention
 
 
 def run_linear(
@@ -115,7 +115,7 @@ def run_scaled_dot_product_attention(
     Returns:
         Float[Tensor, " ... queries d_v"]: Output of SDPA
     """
-    raise NotImplementedError
+    return sdp_attention(Q, K, V, mask)
 
 
 def run_multihead_self_attention(
@@ -149,7 +149,12 @@ def run_multihead_self_attention(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    mha = Multiheaded_Self_Attention(d_model, num_heads)
+    mha.Q.W.data = q_proj_weight
+    mha.K.W .data= k_proj_weight
+    mha.V.W.data = v_proj_weight
+    mha.WO.W.data = o_proj_weight
+    return mha(in_features)
 
 
 def run_multihead_self_attention_with_rope(
@@ -189,8 +194,14 @@ def run_multihead_self_attention_with_rope(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
-
+    batch_size, seq_len, d_model = in_features.shape
+    rope = RoPE(theta, d_model//num_heads, seq_len)
+    mha = Multiheaded_Self_Attention(d_model, num_heads, positional_embeddings=rope)
+    mha.Q.W.data = q_proj_weight
+    mha.K.W .data= k_proj_weight
+    mha.V.W.data = v_proj_weight
+    mha.WO.W.data = o_proj_weight
+    return mha(in_features)
 
 def run_rope(
     d_k: int,
