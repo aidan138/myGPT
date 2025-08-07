@@ -12,7 +12,7 @@ from cs336_basics.tokenizers.bpe_trainer import train_bpe
 from cs336_basics.tokenizers.pretrained_tokenizer import PretrainedTokenizer
 from cs336_basics.nn.layers import Linear, Embedding, RMSNorm, silu, SwiGLU_Feedforward, RoPE,\
     Multiheaded_Self_Attention, Parallel_Multiheaded_Self_Attention, Transformer_Block, TransformerLM
-from cs336_basics.nn.utils import softmax, sdp_attention, cross_entropy_loss
+from cs336_basics.nn.utils import softmax, sdp_attention, cross_entropy_loss, lr_cosine_scheduling, gradient_clipping
 from cs336_basics.nn.optim import AdamW
 
 
@@ -525,7 +525,7 @@ def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm:
 
     The gradients of the parameters (parameter.grad) should be modified in-place.
     """
-    raise NotImplementedError
+    return gradient_clipping(parameters, max_l2_norm)
 
 
 def get_adamw_cls() -> Any:
@@ -560,7 +560,7 @@ def run_get_lr_cosine_schedule(
     Returns:
         Learning rate at the given iteration under the specified schedule.
     """
-    raise NotImplementedError
+    return lr_cosine_scheduling(it, max_learning_rate, min_learning_rate, warmup_iters, cosine_cycle_iters)
 
 
 def run_save_checkpoint(

@@ -48,7 +48,7 @@ class AdamW(Optimizer):
                     continue
                 grad = p.grad.data
                 state = self.state[p]
-                m, v, t = state.get('m', 0), state.get('v', 0), state.get('t', 1)
+                m, v, t = state.get('m', torch.zeros_like(grad)), state.get('v', torch.zeros_like(grad)), state.get('t', 1)
                 m = b1 * m + (1 - b1) * grad
                 # print(grad.shape)
                 v = b2 * v + (1-b2) * grad**2
@@ -60,9 +60,14 @@ class AdamW(Optimizer):
                 state['m'] = m
                 state['v'] = v
                 state['t'] = t + 1
-                grad.free()
 
-
+def lr_cosine_scheduling(t: int, lr_max: float, lr_min: float, t_w: int, t_c: int):
+    if t < t_w:
+        return (t / t_w) * lr_max
+    elif t <= t_c:
+        return lr_min + 0.5 * (1 + math.cos((1-t_w) / (t_c - t_w) * math.pi)) * (lr_max - lr_min)
+    else:
+        return lr_min
     
 weights = torch.nn.Parameter(5 * torch.randn((10,10)))
 opt = AdamW([weights], lr=1e1)
