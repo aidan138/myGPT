@@ -19,12 +19,12 @@ class Linear(nn.Module):
             -3 * weight_stdv, # Lower bound
             3 * weight_stdv # Uppper bound
         ).type(dtype)
-        self.W = nn.Parameter(weights).to(device)
+        self.weight = nn.Parameter(weights).to(device)
         self.b = nn.Parameter(torch.zeros(output_features)).to(device) if bias else None
         self.out = None
 
     def forward(self, x: Tensor) -> Tensor:
-        out = x @ self.W.T
+        out = x @ self.weight.T
         return out if self.b is None else out + self.b
     
     def get_num_parameters(self):
@@ -113,7 +113,7 @@ class RoPE(nn.Module):
         sin, cos = angle_vals.sin(), angle_vals.cos() # N, D/2, 1 for both
         return sin, cos
 
-    def forward(self, x: Tensor, token_positions: torch.Tensor):
+    def forward(self, x: Tensor, token_positions: torch.Tensor = None):
         *batch_dim, N, D = x.shape # Handle arbitrary batch dims
         x = x.view((*batch_dim, N, D//2, 2)).unsqueeze(-1) # B, N, D/2, 2, 1
 
@@ -121,6 +121,7 @@ class RoPE(nn.Module):
             sin, cos = self.sin[token_positions], self.cos[token_positions] # N, D/2, 1
         else:
             sin, cos = self.sin, self.cos
+
         R_mats = torch.stack( # seq_len, d_features/2,  -> seq_len, features_2/2, 2, 2
             (torch.concat([cos, -sin], dim=-1),
              torch.concat([sin, cos], dim=-1)), dim=-2
@@ -135,10 +136,10 @@ class Multiheaded_Self_Attention(nn.Module):
         assert d_model % num_heads == 0, 'Model embeddings must be divisible by number of heads'
         super().__init__()
         self.num_heads = num_heads
-        self.Q = Linear(d_model, d_model)
-        self.K = Linear(d_model, d_model)
-        self.V = Linear(d_model, d_model)
-        self.WO = Linear(d_model, d_model)
+        self.q_proj = Linear(d_model, d_model)
+        self.k_proj = Linear(d_model, d_model)
+        self.v_proj = Linear(d_model, d_model)
+        self.output_proj = Linear(d_model, d_model)
         self.RoPE = positional_embeddings
 
     def forward(self, x: Tensor, token_positions: Tensor | None = None):
@@ -146,9 +147,9 @@ class Multiheaded_Self_Attention(nn.Module):
         # We get an output from the matmul of batch_size, seq_len, num_heads * head_dim
         # We then view for batch_size, seq_len, num_heads, head_dim
         # Finally permute the head dim to the front so that you are processing all heads in parallel as if separate modules
-        query = self.Q(x).view(batch_size, seq_len, self.num_heads, -1).permute((2, 0, 1, 3))
-        key = self.K(x).view(batch_size, seq_len, self.num_heads, -1).permute((2, 0, 1, 3))
-        value = self.V(x).view(batch_size, seq_len, self.num_heads, -1).permute((2, 0, 1, 3))
+        query = self.q_proj(x).view(batch_size, seq_len, self.num_heads, -1).permute((2, 0, 1, 3))
+        key = self.k_proj(x).view(batch_size, seq_len, self.num_heads, -1).permute((2, 0, 1, 3))
+        value = self.v_proj(x).view(batch_size, seq_len, self.num_heads, -1).permute((2, 0, 1, 3))
         # Apply positional embeddings if applicable
         if self.RoPE is not None:
             query = self.RoPE(query, token_positions)
@@ -157,33 +158,29 @@ class Multiheaded_Self_Attention(nn.Module):
         mask = torch.full(mask_shape, True).tril()
         attended = sdp_attention(query, key, value, mask = mask) # Apply attention -> num_heads, batch, seq_len, head_dim
         attended = attended.permute(1, 2, 0, 3).reshape(batch_size, seq_len, -1) # undo the permutation
-        return self.WO(attended).view(batch_size, seq_len, d_model)
+        return self.output_proj(attended).view(batch_size, seq_len, d_model)
 
 
 class Parallel_Multiheaded_Self_Attention(nn.Module):
     
-    def __init__(self, d_model: int, num_heads: int, max_seq_length: int = 0, positional_embeddings: RoPE = None, head_dim: int = 0):
+    def __init__(self, d_model: int, num_heads: int, max_seq_length: int = 0,  head_dim: int = 0):
         assert d_model % num_heads == 0, 'Model embeddings must be divisible by number of heads'
         super().__init__()
-        head_dim = d_model/num_heads if head_dim == 0 else head_dim
+        head_dim = d_model//num_heads if head_dim == 0 else head_dim
         self.num_heads = num_heads
-        self.Q = Linear(head_dim * num_heads, d_model)
-        self.K = Linear(head_dim * num_heads, d_model)
-        self.V = Linear(head_dim * num_heads, d_model)
-        self.WO = Linear(head_dim * num_heads, d_model)
-        self.RoPE = positional_embeddings
+        self.kqv_proj = nn.Parameter(torch.stack([Linear(head_dim*num_heads, d_model).weight.data for _ in range(3)], dim=0))
+        self.output_proj = Linear(head_dim * num_heads, d_model)
 
-    def forward(self, x: Tensor, token_positions: Tensor | None = None):
+    def forward(self, x: Tensor, positional_embeddings: RoPE = None, token_positions: Tensor | None = None):
         batch_size, seq_len, d_model = x.shape
         
         # Combined K,Q,V into a single KQV (3, num_head * head_dim, d_model) matrix reducing everything to a single matrix multiply
         # by leveraging broadcasting to perform serial actions
         # 1st permute performs the transpose of all the matrices
-        # Unsqueezing the input sequence dimension(batch_dimension, 1, seq_length, d_model) allowed for the seq_length, d_model matrices
+        # Unsqueezing the input sequence dimension(batch, 1, seq_length, d_model) allowed for the seq_length, d_model matrices
         # to be broadcasted to the 3 KQV dims.
         # Unsqueezing the KQV (1, 3, num_head * head_dim, d_model) allowed for the KQV to be broadcasted across all batches
-        kqv = torch.stack([self.Q.W.data, self.K.W.data, self.V.W.data], dim=0) # 3, h*dmodel, d_model
-        transformed = (x.unsqueeze(-3) @ kqv.permute((0,2,1)).unsqueeze(0)).permute(1,0,2,3)
+        transformed = (x.unsqueeze(-3) @ self.kqv_proj.permute((0,2,1)).unsqueeze(0)).permute(1,0,2,3)
         
         # We get an output from the matmul of batch_size, seq_len, num_heads * head_dim
         # We then view for batch_size, seq_len, num_heads, head_dim
@@ -191,13 +188,31 @@ class Parallel_Multiheaded_Self_Attention(nn.Module):
         query = transformed[0].reshape(batch_size, seq_len, self.num_heads, -1).permute((2, 0, 1, 3))
         key = transformed[1].reshape(batch_size, seq_len, self.num_heads, -1).permute((2, 0, 1, 3))
         value = transformed[2].reshape(batch_size, seq_len, self.num_heads, -1).permute((2, 0, 1, 3))
+
         # Apply positional embeddings if applicable
-        if self.RoPE is not None:
-            query = self.RoPE(query, token_positions)
-            key = self.RoPE(key, token_positions)
+        if positional_embeddings is not None:
+            query = positional_embeddings(query, token_positions)
+            key = positional_embeddings(key, token_positions)
+            
         mask_shape = (*query.shape[:-1], key.shape[-2]) # ..., N, M
         mask = torch.full(mask_shape, True).tril()
         attended = sdp_attention(query, key, value, mask = mask) # Apply attention -> num_heads, batch, seq_len, head_dim
-        attended = attended.permute(1, 2, 0, 3).reshape(batch_size, seq_len, -1) # undo the permutation
-        return self.WO(attended).view(batch_size, seq_len, d_model)
+        attended = attended.permute(1, 2, 0, 3).reshape(batch_size, seq_len, -1) # undo the permutation -> batch, seq_len, d_model
+        return self.output_proj(attended).view(batch_size, seq_len, d_model)
+
+class Transformer_Block(nn.Module):
+
+    def __init__(self, d_model: int, num_heads: int, d_ff: int):
+        super().__init__()
+
+        self.attn = Parallel_Multiheaded_Self_Attention(d_model, num_heads)
+        self.ln1 = RMSNorm(d_model)
+        self.ffn = SwiGLU_Feedforward(d_model, d_ff)
+        self.ln2 = RMSNorm(d_model)
     
+    def forward(self, x: Tensor, positional_embeddings: RoPE | None):
+        attended_x = self.attn(self.ln1(x), positional_embeddings=positional_embeddings)
+        r_x = x + attended_x
+        ffn_x = self.ffn(self.ln2(r_x))
+        return ffn_x + r_x
+        

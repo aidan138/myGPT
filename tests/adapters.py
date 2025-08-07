@@ -10,7 +10,8 @@ import torch
 from torch import Tensor
 from cs336_basics.tokenizers.bpe_trainer import train_bpe
 from cs336_basics.tokenizers.pretrained_tokenizer import PretrainedTokenizer
-from cs336_basics.nn.layers import Linear, Embedding, RMSNorm, silu, SwiGLU_Feedforward, RoPE, Multiheaded_Self_Attention, Parallel_Multiheaded_Self_Attention
+from cs336_basics.nn.layers import Linear, Embedding, RMSNorm, silu, SwiGLU_Feedforward, RoPE,\
+    Multiheaded_Self_Attention, Parallel_Multiheaded_Self_Attention, Transformer_Block
 from cs336_basics.nn.utils import softmax, sdp_attention
 
 
@@ -92,9 +93,9 @@ def run_swiglu(
     # swiglu.w2.weight.data = w2_weight
     # swiglu.w3.weight.data = w3_weight
     swiglu = SwiGLU_Feedforward(d_model, d_ff)
-    swiglu.linears['W1'].W.data = w1_weight
-    swiglu.linears['W2'].W.data = w2_weight
-    swiglu.linears['W3'].W.data = w3_weight
+    swiglu.linears['W1'].weight.data = w1_weight
+    swiglu.linears['W2'].weight.data = w2_weight
+    swiglu.linears['W3'].weight.data = w3_weight
     return swiglu(in_features)
 
 def run_scaled_dot_product_attention(
@@ -150,10 +151,10 @@ def run_multihead_self_attention(
         implementation with the given QKV projection weights and input features.
     """
     mha = Multiheaded_Self_Attention(d_model, num_heads)
-    mha.Q.W.data = q_proj_weight
-    mha.K.W .data= k_proj_weight
-    mha.V.W.data = v_proj_weight
-    mha.WO.W.data = o_proj_weight
+    mha.q_proj.weight.data = q_proj_weight
+    mha.k_proj.weight.data= k_proj_weight
+    mha.v_proj.weight.data = v_proj_weight
+    mha.output_proj.weight.data = o_proj_weight
     return mha(in_features)
 
 
@@ -196,12 +197,11 @@ def run_multihead_self_attention_with_rope(
     """
     batch_size, seq_len, d_model = in_features.shape
     rope = RoPE(theta, d_model//num_heads, seq_len)
-    mha = Parallel_Multiheaded_Self_Attention(d_model, num_heads, positional_embeddings=rope)
-    mha.Q.W.data = q_proj_weight
-    mha.K.W .data= k_proj_weight
-    mha.V.W.data = v_proj_weight
-    mha.WO.W.data = o_proj_weight
-    return mha(in_features)
+    mha = Parallel_Multiheaded_Self_Attention(d_model, num_heads)
+    mha.output_proj.weight.data = o_proj_weight
+    mha.kqv_proj.data = torch.stack([q_proj_weight, k_proj_weight,v_proj_weight], dim=0)
+
+    return mha(in_features, positional_embeddings=rope)
 
 def run_rope(
     d_k: int,
@@ -297,7 +297,18 @@ def run_transformer_block(
         Float[Tensor, "batch sequence_length d_model"] Tensor with the output of
         running the Transformer block on the input features while using RoPE.
     """
-    raise NotImplementedError
+    _, seq_len, _ = in_features.shape
+    rope = RoPE(theta, d_model//num_heads, seq_len)
+    transformer_block = Transformer_Block(d_model, num_heads, d_ff)
+    kqv_proj = torch.stack([weights['attn.q_proj.weight'], weights['attn.k_proj.weight'], weights['attn.v_proj.weight']])
+    transformer_block.attn.kqv_proj.data = kqv_proj
+    transformer_block.attn.output_proj.weight.data = weights['attn.output_proj.weight']
+    transformer_block.ln1.gain.data = weights['ln1.weight']
+    transformer_block.ln2.gain.data = weights['ln2.weight']
+    transformer_block.ffn.linears['W1'].weight.data = weights['ffn.w1.weight']
+    transformer_block.ffn.linears['W2'].weight.data = weights['ffn.w2.weight']
+    transformer_block.ffn.linears['W3'].weight.data = weights['ffn.w3.weight']
+    return transformer_block(in_features, positional_embeddings=rope)
 
 
 def run_transformer_lm(
