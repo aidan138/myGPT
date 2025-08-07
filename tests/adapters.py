@@ -11,7 +11,7 @@ from torch import Tensor
 from cs336_basics.tokenizers.bpe_trainer import train_bpe
 from cs336_basics.tokenizers.pretrained_tokenizer import PretrainedTokenizer
 from cs336_basics.nn.layers import Linear, Embedding, RMSNorm, silu, SwiGLU_Feedforward, RoPE,\
-    Multiheaded_Self_Attention, Parallel_Multiheaded_Self_Attention, Transformer_Block
+    Multiheaded_Self_Attention, Parallel_Multiheaded_Self_Attention, Transformer_Block, TransformerLM
 from cs336_basics.nn.utils import softmax, sdp_attention
 
 
@@ -390,7 +390,33 @@ def run_transformer_lm(
         Float[Tensor, "batch_size sequence_length vocab_size"]: Tensor with the predicted unnormalized
         next-word distribution for each token.
     """
-    raise NotImplementedError
+    transformer = TransformerLM(vocab_size,
+                                context_length,
+                                num_layers,
+                                num_heads,
+                                d_model,
+                                d_ff,
+                                rope_theta=rope_theta)
+    transformer_blocks = []
+    for i in range(num_layers):
+        layer_name = f'layers.{i}.'
+        block = Transformer_Block(d_model, num_heads, d_ff)
+        kqv_proj = torch.stack([weights[f'{layer_name}attn.q_proj.weight'], weights[f'{layer_name}attn.k_proj.weight'], weights[f'{layer_name}attn.v_proj.weight']], dim=0)
+        block.attn.kqv_proj.data = kqv_proj
+        block.attn.output_proj.weight.data = weights[f'{layer_name}attn.output_proj.weight']
+        block.ln1.gain.data = weights[f'{layer_name}ln1.weight']
+        block.ln2.gain.data = weights[f'{layer_name}ln2.weight']
+        block.ffn.linears['W1'].weight.data = weights[f'{layer_name}ffn.w1.weight']
+        block.ffn.linears['W2'].weight.data = weights[f'{layer_name}ffn.w2.weight']
+        block.ffn.linears['W3'].weight.data = weights[f'{layer_name}ffn.w3.weight']
+        transformer_blocks.append(block)
+    transformer.transformer_blocks = torch.nn.ModuleList(transformer_blocks)
+    transformer.embeddings.weight.data = weights['token_embeddings.weight']
+    transformer.ln.gain.data = weights['ln_final.weight']
+    transformer.output_layer.weight.data = weights['lm_head.weight']
+    return transformer(in_indices)
+
+
 
 
 def run_rmsnorm(

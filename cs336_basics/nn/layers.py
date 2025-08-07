@@ -42,10 +42,10 @@ class Embedding(nn.Module):
             -3, # Lower bound
             3 # Upper bound
         ).type(dtype)
-        self.embeddings = nn.Parameter(embeddings).to(device)
+        self.weight = nn.Parameter(embeddings).to(device)
 
     def forward(self, token_ids: Tensor):
-        return self.embeddings[token_ids]
+        return self.weight[token_ids]
     
 
 class RMSNorm(nn.Module):
@@ -120,7 +120,8 @@ class RoPE(nn.Module):
         if token_positions is not None:
             sin, cos = self.sin[token_positions], self.cos[token_positions] # N, D/2, 1
         else:
-            sin, cos = self.sin, self.cos
+            token_positions = torch.arange(N)
+            sin, cos = self.sin[token_positions], self.cos[token_positions]
 
         R_mats = torch.stack( # seq_len, d_features/2,  -> seq_len, features_2/2, 2, 2
             (torch.concat([cos, -sin], dim=-1),
@@ -128,6 +129,7 @@ class RoPE(nn.Module):
         ) 
         for _ in batch_dim:
             R_mats = R_mats.unsqueeze(0) # 1*B, N, D/2, 2,2
+        print(R_mats.shape, x.shape)
         return (R_mats @ x).squeeze(-1).view(*batch_dim, N, D)
 
 class Multiheaded_Self_Attention(nn.Module):
@@ -163,10 +165,9 @@ class Multiheaded_Self_Attention(nn.Module):
 
 class Parallel_Multiheaded_Self_Attention(nn.Module):
     
-    def __init__(self, d_model: int, num_heads: int, max_seq_length: int = 0,  head_dim: int = 0):
-        assert d_model % num_heads == 0, 'Model embeddings must be divisible by number of heads'
+    def __init__(self, d_model: int, num_heads: int, max_seq_length: int = 0,  head_dim: int = None):
         super().__init__()
-        head_dim = d_model//num_heads if head_dim == 0 else head_dim
+        head_dim = d_model//num_heads if head_dim is None else head_dim
         self.num_heads = num_heads
         self.kqv_proj = nn.Parameter(torch.stack([Linear(head_dim*num_heads, d_model).weight.data for _ in range(3)], dim=0))
         self.output_proj = Linear(head_dim * num_heads, d_model)
@@ -216,3 +217,34 @@ class Transformer_Block(nn.Module):
         ffn_x = self.ffn(self.ln2(r_x))
         return ffn_x + r_x
         
+
+class TransformerLM(nn.Module):
+    def __init__(self,
+                 vocab_size: int,
+                 context_length: int,
+                 num_layers: int,
+                 num_heads: int,
+                 d_model: int = None,
+            
+                 d_ff: int = None,
+                 head_dim: int = None,
+                 rope_theta = None
+                 ):
+        assert d_model % num_heads == 0, 'Model embeddings must be divisible by number of heads'
+        super().__init__()
+        d_model = d_model if d_model is not None else 128 * num_layers
+        d_ff = d_ff if d_ff is not None else 4 * 2/3 * d_model # Based on convention for GLUs
+        head_dim = head_dim if head_dim is not None else d_model // num_heads
+        self.embeddings = Embedding(vocab_size, d_model)
+        self.transformer_blocks = nn.ModuleList([Transformer_Block(d_model, num_heads, d_ff) for _ in range(num_layers)])
+        self.rope = RoPE(rope_theta, head_dim, context_length)
+        self.ln = RMSNorm(d_model)
+        self.output_layer = Linear(d_model, vocab_size)
+
+    def forward(self, x: Tensor):
+        x = self.embeddings(x)
+        for transformer in self.transformer_blocks:
+            x = transformer(x, self.rope)
+        x = self.ln(x)
+        x = self.output_layer(x)
+        return x
