@@ -92,9 +92,9 @@ class SwiGLU_Feedforward(nn.Module):
         x_gate = self.linears['W3'](x)# B, N, FF
         # Apply elementwise multiplier with sigmoid activation
         # Note: sigmoid between 0 and 1
-        x_silu = silu(xpreact)
-        x_swiglu = x_silu * x_gate # Apply the linear transform gate
-        return self.linears['W2'](x_swiglu)
+        xact = silu(xpreact)
+        xact = xact * x_gate # Apply the linear transform gate
+        return self.linears['W2'](xact)
 
 
 class RoPE(nn.Module):
@@ -102,7 +102,9 @@ class RoPE(nn.Module):
     def __init__(self, theta: float, d_k: int, max_seq_len: int, device: torch.device = None):
         super().__init__()
         assert d_k % 2 == 0, "Input dim must be divisible by 2"
-        self.sin, self.cos= self._compute_theta_mat(theta, d_k, max_seq_len, device)
+        sin, cos = self._compute_theta_mat(theta, d_k, max_seq_len, device)
+        self.register_buffer('sin', sin, persistent=False)
+        self.register_buffer('cos', cos, persistent=False)
 
     def _compute_theta_mat(self, theta: float, d_k: int, max_seq_len: int, device: torch.device):
         angle_vals = [
@@ -116,19 +118,17 @@ class RoPE(nn.Module):
     def forward(self, x: Tensor, token_positions: torch.Tensor = None):
         *batch_dim, N, D = x.shape # Handle arbitrary batch dims
         x = x.view((*batch_dim, N, D//2, 2)).unsqueeze(-1) # B, N, D/2, 2, 1
+        token_positions = token_positions if token_positions is not None else torch.arange(N, device=x.device)
+        sin, cos = self.sin[token_positions], self.cos[token_positions]
 
-        if token_positions is not None:
-            sin, cos = self.sin[token_positions], self.cos[token_positions] # N, D/2, 1
-        else:
-            token_positions = torch.arange(N)
-            sin, cos = self.sin[token_positions], self.cos[token_positions]
-
-        R_mats = torch.stack( # seq_len, d_features/2,  -> seq_len, features_2/2, 2, 2
+        R_mats = torch.stack( # seq_len, d_features/2,  -> seq_len, d_model/2, 2, 2
             (torch.concat([cos, -sin], dim=-1),
              torch.concat([sin, cos], dim=-1)), dim=-2
         ) 
+
         for _ in batch_dim:
             R_mats = R_mats.unsqueeze(0) # 1*B, N, D/2, 2,2
+            
         print(R_mats.shape, x.shape)
         return (R_mats @ x).squeeze(-1).view(*batch_dim, N, D)
 
@@ -170,7 +170,7 @@ class Parallel_Multiheaded_Self_Attention(nn.Module):
         head_dim = d_model//num_heads if head_dim is None else head_dim
         self.num_heads = num_heads
         self.kqv_proj = nn.Parameter(torch.stack([Linear(head_dim*num_heads, d_model).weight.data for _ in range(3)], dim=0))
-        self.output_proj = Linear(head_dim * num_heads, d_model)
+        self.output_proj = Linear(d_model, d_model)
 
     def forward(self, x: Tensor, positional_embeddings: RoPE = None, token_positions: Tensor | None = None):
         batch_size, seq_len, d_model = x.shape

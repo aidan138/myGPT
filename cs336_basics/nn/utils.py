@@ -3,7 +3,7 @@ from torch import Tensor
 import math
 
 def softmax(x: Tensor, dim: int = -1):
-    norm_x = x-x.max(dim=dim, keepdim= True).values # Subtract the max for numeric stability
+    norm_x = x-x.max(dim=dim, keepdim= True).values # Subtract the max for numerical stability
     softmax = norm_x.exp() / torch.sum(norm_x.exp(), dim=dim, keepdim=True)
     return softmax
 
@@ -18,3 +18,15 @@ def sdp_attention(Q: Tensor, K: Tensor, V: Tensor, mask: Tensor | None = None):
     prob_matrix = softmax(sim_matrix, dim=-1)
     
     return  (prob_matrix @ V).view(batch, *rest, -1, feat_dim) # Returns B, ..., n, feat_dim
+
+def cross_entropy_loss(logits: Tensor, targets: Tensor):
+    # logits can be [... , N, V]
+    # targets are [..., N]
+
+    logits = logits - logits.max(dim=-1, keepdim=True).values # Subtract for numerical stability
+    targ_logits = torch.gather(logits, dim=-1, index=targets.unsqueeze(-1))
+    print(logits, targets)
+    print(logits.shape, targ_logits.shape, '\n', targ_logits)
+    prob_sum = logits.exp().sum(dim=-1, keepdim=True).log()
+
+    return (prob_sum - targ_logits).mean()
