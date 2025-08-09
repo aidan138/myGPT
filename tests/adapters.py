@@ -405,17 +405,23 @@ def run_transformer_lm(
         Float[Tensor, "batch_size sequence_length vocab_size"]: Tensor with the predicted unnormalized
         next-word distribution for each token.
     """
-    transformer = TransformerLM(vocab_size,
-                                context_length,
-                                num_layers,
-                                num_heads,
-                                d_model,
-                                d_ff,
-                                rope_theta=rope_theta)
+    bsz, seq_len = in_indices.shape
+    model_args= ModelArgs(
+        d_model=d_model,
+        vocab_size=vocab_size,
+        d_ff=d_ff,
+        rope_theta=rope_theta,
+        num_layers=num_layers,
+        num_heads=num_heads,
+        max_seq_len=seq_len,
+        max_batch_size=bsz
+    )
+
+    transformer = TransformerLM(model_args)
     transformer_blocks = []
     for i in range(num_layers):
         layer_name = f'layers.{i}.'
-        block = Transformer_Block(d_model, num_heads, d_ff)
+        block = Transformer_Block(model_args)
         kqv_proj = torch.stack([weights[f'{layer_name}attn.q_proj.weight'], weights[f'{layer_name}attn.k_proj.weight'], weights[f'{layer_name}attn.v_proj.weight']], dim=0)
         block.attn.kqv_proj.data = kqv_proj
         block.attn.output_proj.weight.data = weights[f'{layer_name}attn.output_proj.weight']

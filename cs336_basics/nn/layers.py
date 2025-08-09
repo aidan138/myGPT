@@ -183,11 +183,9 @@ class Parallel_Multiheaded_Self_Attention(nn.Module):
                                                      model_args.max_batch_size,
                                                      model_args.max_seq_len,
                                                      self.head_dim)), persistent=False)
-
-        self.cache_idx = 0
             
 
-    def forward(self, x: Tensor, positional_embeddings: RoPE = None):
+    def forward(self, x: Tensor, positional_embeddings: RoPE = None, start_pos:int = 0):
         batch_size, seq_len, d_model = x.shape
         
         # Combined K,Q,V into a single KQV (3, num_head * head_dim, d_model) matrix reducing everything to a single matrix multiply
@@ -206,24 +204,22 @@ class Parallel_Multiheaded_Self_Attention(nn.Module):
         key = transformed[1].reshape(batch_size, seq_len, self.num_heads, -1).permute((2,0,1,3))
         value = transformed[2].reshape(batch_size, seq_len, self.num_heads, -1).permute((2,0,1,3))
 
-        last_pos = self.cache_idx + seq_len
-        token_positions = torch.arange(self.cache_idx, last_pos)
+        last_pos = start_pos + seq_len
+        token_positions = torch.arange(start_pos, last_pos)
         # Apply positional embeddings if applicable
         if positional_embeddings is not None:
             query = positional_embeddings(query, token_positions)
             key = positional_embeddings(key, token_positions)
 
-        
 
         if not self.training:
             # Save to kv_cache
-            self.k_cache[:, :batch_size, self.cache_idx:last_pos] = key
-            self.v_cache[:, :batch_size, self.cache_idx:last_pos] = value
+            self.k_cache[:, :batch_size, start_pos:last_pos] = key
+            self.v_cache[:, :batch_size, start_pos:last_pos] = value
 
             # Extract all the cached values
             value = self.v_cache[:, :batch_size, :last_pos]
             key = self.k_cache[:, :batch_size, :last_pos]
-            self.cache_idx = last_pos
 
         mask = torch.tril(torch.ones(seq_len, key.shape[-2], device=x.device)).bool()
         attended = sdp_attention(query, key, value, mask = mask) # Apply attention -> num_heads, batch, seq_len, head_dim
@@ -234,48 +230,42 @@ class Parallel_Multiheaded_Self_Attention(nn.Module):
 
 class Transformer_Block(nn.Module):
 
-    def __init__(self, d_model: int, num_heads: int, d_ff: int):
+    def __init__(self, model_args):
         super().__init__()
 
-        self.attn = Parallel_Multiheaded_Self_Attention(d_model, num_heads)
-        self.ln1 = RMSNorm(d_model)
-        self.ffn = SwiGLU_Feedforward(d_model, d_ff)
-        self.ln2 = RMSNorm(d_model)
+        self.attn = Parallel_Multiheaded_Self_Attention(model_args)
+        self.ln1 = RMSNorm(model_args.d_model)
+        self.ffn = SwiGLU_Feedforward(model_args.d_model, model_args.d_ff)
+        self.ln2 = RMSNorm(model_args.d_model)
     
-    def forward(self, x: Tensor, positional_embeddings: RoPE | None):
-        attended_x = self.attn(self.ln1(x), positional_embeddings=positional_embeddings)
+    def forward(self, x: Tensor, start_pos: int = 0, positional_embeddings: RoPE | None = None):
+        attended_x = self.attn(self.ln1(x), positional_embeddings, start_pos)
         r_x = x + attended_x
         ffn_x = self.ffn(self.ln2(r_x))
         return ffn_x + r_x
         
 
 class TransformerLM(nn.Module):
-    def __init__(self,
-                 vocab_size: int,
-                 context_length: int,
-                 num_layers: int,
-                 num_heads: int,
-                 d_model: int = None,
-            
-                 d_ff: int = None,
-                 head_dim: int = None,
-                 rope_theta = None
-                 ):
-        assert d_model % num_heads == 0, 'Model embeddings must be divisible by number of heads'
+    def __init__(self, model_args):
         super().__init__()
-        d_model = d_model if d_model is not None else 128 * num_layers
-        d_ff = d_ff if d_ff is not None else int(4 * 2/3 * d_model) # Based on convention for GLUs
-        head_dim = head_dim if head_dim is not None else d_model // num_heads
+        d_model = model_args.d_model if model_args.d_model is not None else 128 * model_args.num_layers
+        d_ff = model_args.d_ff if model_args.d_ff is not None else int(4 * 2/3 * d_model) # Based on convention for GLUs
+        num_heads = model_args.num_heads
+        head_dim = model_args.head_dim if model_args.head_dim is not None else d_model // num_heads
+        vocab_size = model_args.vocab_size
         self.embeddings = Embedding(vocab_size, d_model)
-        self.transformer_blocks = nn.ModuleList([Transformer_Block(d_model, num_heads, d_ff) for _ in range(num_layers)])
-        self.rope = RoPE(rope_theta, head_dim, context_length)
+        self.transformer_blocks = nn.ModuleList([Transformer_Block(model_args) for _ in range(model_args.num_layers)])
+        self.rope = RoPE(model_args.rope_theta, head_dim, model_args.max_seq_len)
         self.ln = RMSNorm(d_model)
         self.output_layer = Linear(d_model, vocab_size)
+        self.current_pos = 0 # For kv caching
 
     def forward(self, x: Tensor):
+        seq_len = x.shape[1]
         x = self.embeddings(x)
         for transformer in self.transformer_blocks:
-            x = transformer(x, self.rope)
+            x = transformer(x, positional_embeddings=self.rope, start_pos=self.current_pos)
         x = self.ln(x)
         x = self.output_layer(x)
+        self.current_pos += seq_len
         return x

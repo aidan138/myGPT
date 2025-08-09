@@ -143,6 +143,7 @@ def train(model: nn.Module, train_args: TrainingArgs, run: wandb.Run):
                 cv_loss = get_cv_loss(model, val_set).item()
             print(f"CV loss at iteration {current_iter + i} is {cv_loss:.6f}")
             run.log({'cv_loss': cv_loss})
+            model.cache_idx = 0
             model.train()
 
         if i + current_iter % log_train_iterations:
