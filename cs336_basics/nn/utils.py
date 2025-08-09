@@ -2,7 +2,6 @@ import torch
 from torch import Tensor
 from typing import Iterable
 import math
-import numpy.typing as npt
 
 
 def softmax(x: Tensor, dim: int = -1):
@@ -47,9 +46,3 @@ def gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm: flo
         if l2 > max_l2_norm:
             grad *= max_l2_norm / (l2 + eps)
 
-def get_batch(dataset: npt.NDArray, batch_size, context_length, device):
-    dataset = torch.from_numpy(dataset).to(device)
-    document_length = dataset.shape[0] # Document length    
-    choices = torch.randint(low=0, high=document_length-context_length, size=(batch_size,)) # Make 32 random choices from the document
-    X, y = torch.stack([dataset[i: i+context_length] for i in choices], dim=0).to(device), torch.stack([dataset[i+1: i+context_length+1] for i in choices]).to(device)
-    return (X, y)

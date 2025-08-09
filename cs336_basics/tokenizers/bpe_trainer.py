@@ -3,7 +3,7 @@ from uuid import uuid4
 from collections import Counter
 import heapq
 import regex as re
-from cs336_basics.pretokenization_example import find_chunk_boundaries
+from cs336_basics.tokenizers.pretokenization_example import find_chunk_boundaries
 from multiprocessing import cpu_count, Pool
 import mmap
 import time

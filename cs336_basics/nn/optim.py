@@ -60,21 +60,3 @@ class AdamW(Optimizer):
                 state['m'] = m
                 state['v'] = v
                 state['t'] = t + 1
-
-def lr_cosine_scheduling(t: int, lr_max: float, lr_min: float, t_w: int, t_c: int):
-    if t < t_w:
-        return (t / t_w) * lr_max
-    elif t <= t_c:
-        return lr_min + 0.5 * (1 + math.cos((1-t_w) / (t_c - t_w) * math.pi)) * (lr_max - lr_min)
-    else:
-        return lr_min
-    
-weights = torch.nn.Parameter(5 * torch.randn((10,10)))
-opt = AdamW([weights], lr=1e1)
-
-# for t in range(500):
-#     opt.zero_grad() # Reset the gradients for learnable parameters
-#     loss = (weights**2).mean() # Compute a scalar loss value.
-#     print(loss.cpu().item())
-#     loss.backward() # Run backward pass, which computes gradients
-#     opt.step() # Run optimizer step

@@ -1,7 +1,7 @@
 import torch
 from torch import nn, Tensor
 import math
-from cs336_basics.nn.utils import softmax, sdp_attention
+from cs336_basics.nn.utils import sdp_attention
 
 class Linear(nn.Module):
     """
@@ -66,7 +66,6 @@ class RMSNorm(nn.Module):
         rms_x = (square_sum_x / D).sqrt() # B, N, 1 
         # rms_x will be broadcasted across the feature dim and gain will be broadcasted across batch and sequence dims
         rms_norm_x = (x / rms_x) * self.gain # Element wise multiply and division
-
         return rms_norm_x.to(input_dtype)
     
 
@@ -165,14 +164,24 @@ class Multiheaded_Self_Attention(nn.Module):
 
 class Parallel_Multiheaded_Self_Attention(nn.Module):
     
-    def __init__(self, d_model: int, num_heads: int, max_seq_length: int = 0,  head_dim: int = None):
+    def __init__(self, d_model: int, num_heads: int, head_dim: int = None, max_seq_length: int = None, max_batch_size: int = None, num_kv_heads = None):
         super().__init__()
-        head_dim = d_model//num_heads if head_dim is None else head_dim
+        self.head_dim = d_model//num_heads if head_dim is None else head_dim
         self.num_heads = num_heads
         self.kqv_proj = nn.Parameter(torch.stack([Linear(head_dim*num_heads, d_model).weight.data for _ in range(3)], dim=0))
         self.output_proj = Linear(d_model, d_model)
+        
+        if None not in [max_seq_length, max_batch_size, num_kv_heads]:
+            # KV cache
+            self.cache = True
+            self.k_cache = self.register_buffer("k_cache", torch.zeros((max_batch_size, max_seq_length, num_kv_heads, head_dim)), persistent=False) # TODO look into different dims for kq and v
+            self.v_cache = self.register_buffer("v_cache", torch.zeros((max_batch_size, max_seq_length, num_kv_heads, head_dim)), persistent=False)
+        else:
+            self.cache = False
 
-    def forward(self, x: Tensor, positional_embeddings: RoPE = None, token_positions: Tensor | None = None):
+            
+
+    def forward(self, x: Tensor, positional_embeddings: RoPE = None, token_positions: Tensor | None = None, start_pos: int = 0):
         batch_size, seq_len, d_model = x.shape
         
         # Combined K,Q,V into a single KQV (3, num_head * head_dim, d_model) matrix reducing everything to a single matrix multiply
@@ -190,16 +199,23 @@ class Parallel_Multiheaded_Self_Attention(nn.Module):
         key = transformed[1].reshape(batch_size, seq_len, self.num_heads, -1).permute((2, 0, 1, 3))
         value = transformed[2].reshape(batch_size, seq_len, self.num_heads, -1).permute((2, 0, 1, 3))
 
+        if self.cache:
+            self.k_cache[:batch_size, start_pos:start_pos + seq_len, :, :] = key
+            self.v_cache[:batch_size, start_pos:start_pos + seq_len, :, :] = query
+
         # Apply positional embeddings if applicable
         if positional_embeddings is not None:
             query = positional_embeddings(query, token_positions)
             key = positional_embeddings(key, token_positions)
-            
+        
+        
         mask_shape = (*query.shape[:-1], key.shape[-2]) # ..., N, M
         mask = torch.full(mask_shape, True).tril()
         attended = sdp_attention(query, key, value, mask = mask) # Apply attention -> num_heads, batch, seq_len, head_dim
         attended = attended.permute(1, 2, 0, 3).reshape(batch_size, seq_len, -1) # undo the permutation -> batch, seq_len, d_model
-        return self.output_proj(attended).view(batch_size, seq_len, d_model)
+        attended = self.output_proj(attended).view(batch_size, seq_len, d_model)
+        
+        return attended
 
 class Transformer_Block(nn.Module):
 
