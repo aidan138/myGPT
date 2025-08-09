@@ -16,7 +16,7 @@ def main():
     datasets = [r'data\TinyStoriesV2-GPT4-train.txt', r'data\owt_train.txt']
     dataset_path = datasets[data_set_idx]
     save_path = dataset_path.replace(".txt",'.npy')
-
+    print(save_path)
     with open(dataset_path, 'rb') as f:
         chunks = find_chunk_boundaries(f, 4, '<|endoftext|>'.encode('utf-8'))
     

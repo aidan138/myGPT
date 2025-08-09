@@ -8,65 +8,71 @@ from cs336_basics.train_utils import load_checkpoint, save_checkpoint, get_batch
 import numpy as np
 import numpy.typing as npt
 import wandb
+from pydantic import ValidationError
 import time
 from dotenv import load_dotenv
 import os
 
 load_dotenv()
-wandb_username = os.getenv('WANDBUSERNAME')
+#wandb_username = os.getenv('WANDBUSERNAME')
 project_name = os.getenv('WANDBPROJECTNAME')
 
 
 # Current args
 # See args.py for more options
-model_args = {
-    # LM config
-    'd_model': 128,
-    'vocab_size': 10000,
-    'd_ff': 256,
-    'rope_theta': 10000,
-    
-    # Attention config
-    'num_layers': 5,
-    'n_heads': 32,
+try:
+    model_args = ModelArgs(
+        # LM config
+        d_model=128,
+        vocab_size=10000,
+        d_ff=256,
+        rope_theta=10000,
+        
+        # Attention config
+        num_layers=5,
+        num_heads=32,
 
-    #'n_kv_heads': Optional[int] = None,
-    'head_dim': 8,
+        #'n_kv_heads': Optional[int] = None,
+        head_dim=8,
 
-    # Inference time parameters
-    'max_batch_size': 32,
-    'max_seq_len': 256, # Will be used at train as well but should be scaled down considerably
-}
+        # Inference time parameters
+        max_batch_size=32,
+        max_seq_len=256, # Will be used at train as well but should be scaled down considerably
+    )
 
 
-train_args = {
-    # Train Loop
-    'iterations': 50,
-    'checkpoint_freq': 100,
-    'device': 'cuda' if torch.cuda.is_available else 'cpu',
-    'dtype': torch.float32,
-    'save_path': r'',
-    'train_path': r'',
-    'cv_path': r'',
-    'load_path': None,
 
-    # Optimizer
-    'lr_max' : 0.001,
-    'weight_decay': 0.01,
+    train_args = TrainingArgs(
+        # Train Loop
+        iterations=50,
+        checkpoint_freq=100,
+        batch_size=32,
+        device='cuda' if torch.cuda.is_available else 'cpu',
+        dtype=torch.float32,
+        save_path=r'',
+        train_path=r'',
+        cv_path=r'',
+        load_path=None,
 
-    # Learning rate scheduler
-    'lr_min' : 1e-6,
-    'warmup_iterations': None,
-    'cos_iterations': None,
+        # Optimizer
+        lr_max=0.001,
+        weight_decay=0.01,
 
-    # Gradient Clipping
-    'max_l2_norm' : None, # for gradient clipping
+        # Learning rate scheduler
+        lr_min=1e-6,
+        warmup_iterations=10,
+        cos_iterations=10,
 
-    # Logging Parameters
-    'log_cv_iterations': 10,
-    'log_train_iterations': 10,
-    'train_loss_alpha': 0.1
-}
+        # Gradient Clipping
+        max_l2_norm=None, # for gradient clipping
+
+        # Logging Parameters
+        log_cv_iterations=10,
+        log_train_iterations=10,
+        train_loss_alpha=0.1
+    )
+except ValidationError as e:
+    print(f"Validation error: {e.errors()}")
 
 
 def get_cv_loss(model: nn.Module, val_set: npt.ArrayLike, iterations: int = 10):
@@ -82,7 +88,7 @@ def train(model: nn.Module, train_args: TrainingArgs, run: wandb.Run):
     
     optimizer = AdamW(
         params = model.parameters(),
-        lr = train_args.lr,
+        lr = train_args.lr_max,
         betas = train_args.betas,
         weight_decay = train_args.weight_decay
     )
@@ -111,10 +117,23 @@ def train(model: nn.Module, train_args: TrainingArgs, run: wandb.Run):
 
         # Perform an update step
         optimizer.zero_grad()
+
+        # lr scheduling
+        for param_group in optimizer.param_groups():
+            param_group['lr'] = lr_cosine_scheduling(t=current_iter + i,
+                                                     lr_max=train_args.lr_max,
+                                                     lr_min=train_args.lr_min,
+                                                     t_w=train_args.warmup_iterations,
+                                                     t_c=train_args.cos_iterations)
+
+        # Backprop
         loss.backward()
+
+        # Gradient clipping
         if grad_clip:
             gradient_clipping(model.parameters())
 
+        # Parameter update
         optimizer.step()
 
         # Logging statistics
@@ -124,6 +143,7 @@ def train(model: nn.Module, train_args: TrainingArgs, run: wandb.Run):
                 cv_loss = get_cv_loss(model, val_set).item()
             print(f"CV loss at iteration {current_iter + i} is {cv_loss:.6f}")
             run.log({'cv_loss': cv_loss})
+            model.train()
 
         if i + current_iter % log_train_iterations:
             print(f"Training loss at iteration {current_iter + i} is {running_loss:.6f}")
@@ -146,13 +166,14 @@ def main(model_args: ModelArgs, train_args: TrainingArgs):
         num_heads = model_args.num_heads,
         d_model = model_args.d_model,
         d_ff = model_args.d_ff,
-        head_dim = model_args.head_dim
+        head_dim = model_args.head_dim,
+        rope_theta=model_args.rope_theta
     )
 
     run = wandb.init(
-        entity = wandb_username,
+        #entity = wandb_username,
         project = project_name,
-        config = {'training': train_args.dump(), 'model': model_args.dump()}
+        config = {'training': train_args.model_dump(), 'model': model_args.model_dump()}
     )
 
     print(f"Starting training")
@@ -170,7 +191,6 @@ def main(model_args: ModelArgs, train_args: TrainingArgs):
 
 
 if __name__ == '__main__':
-    model_args = ModelArgs.validate(model_args)
-    train_args = TrainingArgs.validate(train_args)
+    torch.randn(1,1).to(train_args.dtype)
     assert model_args.max_batch_size >= train_args.batch_size
     main(model_args, train_args)

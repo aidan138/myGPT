@@ -12,10 +12,10 @@ from cs336_basics.tokenizers.bpe_trainer import train_bpe
 from cs336_basics.tokenizers.pretrained_tokenizer import PretrainedTokenizer
 from cs336_basics.nn.layers import Linear, Embedding, RMSNorm, silu, SwiGLU_Feedforward, RoPE,\
     Multiheaded_Self_Attention, Parallel_Multiheaded_Self_Attention, Transformer_Block, TransformerLM
-from cs336_basics.nn.utils import softmax, sdp_attention, cross_entropy_loss, lr_cosine_scheduling, gradient_clipping, \
-get_batch
+from cs336_basics.nn.utils import softmax, sdp_attention, cross_entropy_loss, lr_cosine_scheduling, gradient_clipping
 from cs336_basics.nn.optim import AdamW
-from cs336_basics.train import save_checkpoint, load_checkpoint
+from cs336_basics.train_utils import get_batch, save_checkpoint, load_checkpoint
+from cs336_basics.args import ModelArgs
 
 
 def run_linear(
@@ -200,7 +200,19 @@ def run_multihead_self_attention_with_rope(
     """
     batch_size, seq_len, d_model = in_features.shape
     rope = RoPE(theta, d_model//num_heads, seq_len)
-    mha = Parallel_Multiheaded_Self_Attention(d_model, num_heads)
+
+    args = ModelArgs(
+        d_model=d_model,
+        vocab_size=50000,
+        rope_theta=theta,
+        num_layers=1,
+        num_heads=num_heads,
+        num_kv_heads=None,
+        head_dim=None,
+        max_batch_size=batch_size,
+        max_seq_len=seq_len
+    )
+    mha = Parallel_Multiheaded_Self_Attention(args)
     mha.output_proj.weight.data = o_proj_weight
     mha.kqv_proj.data = torch.stack([q_proj_weight, k_proj_weight,v_proj_weight], dim=0)
 

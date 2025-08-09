@@ -31,12 +31,12 @@ class SGD(Optimizer):
         return loss
     
 class AdamW(Optimizer):
-    def __init__(self, param: Iterable[torch.nn.Parameter], lr: float = 0.001, betas: tuple = (0.9, 0.999), weight_decay: float = 0.01, eps: float = 1e-8):
+    def __init__(self, params: Iterable[torch.nn.Parameter], lr: float = 0.001, betas: tuple = (0.9, 0.999), weight_decay: float = 0.01, eps: float = 1e-8):
         if lr < 0:
             raise ValueError(f'Invalid learning rate {lr}')
         
         defaults = {'lr': lr, 'betas': betas, 'decay': weight_decay, 'epsilon': eps}
-        super().__init__(param, defaults)
+        super().__init__(params, defaults)
     
     def step(self, closure: Optional[Callable] = None):
         loss = None if closure is None else closure()

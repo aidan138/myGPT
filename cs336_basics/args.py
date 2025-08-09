@@ -1,15 +1,14 @@
 from enum import Enum
 from typing import Optional, IO
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, model_validator, field_serializer
 import torch
-import os
-
+from pathlib import Path
 
 class ModelArgs(BaseModel):
     d_model: int
     vocab_size: int
-    d_ff: Optional[float] = None
+    d_ff: Optional[int] = None
     rope_theta: float = 10000
     
     # Attention config
@@ -22,25 +21,29 @@ class ModelArgs(BaseModel):
     max_batch_size: int = 32
     max_seq_len: int = 2048 # Will be used at train as well but should be scaled down considerably
 
-    @model_validator
+    @model_validator(mode='after')
     def validate(self) -> "ModelArgs":
         # Esssentially validating all attention heads
+        self.num_kv_heads = self.num_heads if self.num_kv_heads is None else self.num_kv_heads
         assert self.num_kv_heads <= self.num_heads, f"Number of kv_heads: {self.num_kv_heads} must be less than n_heads: {self.num_heads}"
         assert self.num_heads % self.num_kv_heads == 0, f"n_heads {self.num_heads} must be divisible by {self.num_kv_heads}"
-        assert self.dim % self.num_heads == 0, f"d_model: {self.d_model} must be divisible by n_heads: {self.num_heads}"
+        assert self.d_model % self.num_heads == 0, f"d_model: {self.d_model} must be divisible by n_heads: {self.num_heads}"
         return self
     
 
 class TrainingArgs(BaseModel):
+    model_config = {
+        'arbitrary_types_allowed': True
+    }
     # Train Loop
     iterations: int
     checkpoint_freq: int
     batch_size: int
-    save_path: str | IO[bytes]
-    train_path: str | IO[bytes]
-    cv_path: str | IO[bytes]
-    load_path: Optional[str | IO[bytes]]
-    device: Optional[torch.device] = 'cpu'
+    save_path: str | Path
+    train_path: str | Path
+    cv_path: str | Path
+    load_path: Optional[str | Path] = None
+    device: Optional[str] = 'cpu'
     dtype: Optional[torch.dtype] = torch.float32
 
     # Logging
@@ -51,6 +54,7 @@ class TrainingArgs(BaseModel):
     # Optimizer
     lr_max : float
     weight_decay: Optional [float] = None
+    betas: Optional[tuple] = (0.9, 0.999)
 
     # Learning rate scheduler
     lr_min : Optional[float] = None
@@ -60,9 +64,13 @@ class TrainingArgs(BaseModel):
     # Gradient Clipping
     max_l2_norm : Optional[float] = None
     
+    @field_serializer(mode='before')
+    def parse_dtype(cls, v):
+        if isinstance(v, str):
+            getattr(torch, v)
 
-
-    def validate(self):
+    @model_validator(mode='after')
+    def validate(self) -> "TrainingArgs":
         assert self.iterations % self.checkpoint_freq, f"The checkpoint frequency ({self.checkpoint_freq}) must be divisible by the iterations ({self.iterations})"
         if self.lr_min or self.warmup_iterations or self.cos_iterations:
             assert None not in [self.lr_min, self.warmup_iterations, self.cos_iterations], f"If using annealing lr_min ({self.lr_min}), \
