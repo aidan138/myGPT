@@ -29,11 +29,11 @@ try:
         rope_theta=10000,
         
         # Attention config
-        num_layers=5,
+        num_layers=12,
         num_heads=32,
 
         #'n_kv_heads': Optional[int] = None,
-        head_dim=8,
+        #head_dim=8,
 
         # Inference time parameters
         max_batch_size=32,
@@ -44,24 +44,24 @@ try:
 
     train_args = TrainingArgs(
         # Train Loop
-        iterations=50,
+        iterations=1000,
         checkpoint_freq=100,
         batch_size=32,
-        device='cuda' if torch.cuda.is_available else 'cpu',
+        device='cuda' if torch.cuda.is_available() else 'cpu',
         dtype=torch.float32,
-        save_path=r'',
-        train_path=r'',
-        cv_path=r'',
+        save_path=r'models\test_checkpoint.pt',
+        train_path=r'data\TinyStoriesV2-GPT4-train.npy',
+        cv_path=r'data\TinyStoriesV2-GPT4-valid.npy',
         load_path=None,
 
         # Optimizer
-        lr_max=0.001,
+        lr_max=1.0,
         weight_decay=0.01,
 
         # Learning rate scheduler
         lr_min=1e-6,
-        warmup_iterations=10,
-        cos_iterations=10,
+        warmup_iterations=200,
+        cos_iterations=800,
 
         # Gradient Clipping
         max_l2_norm=None, # for gradient clipping
@@ -69,16 +69,18 @@ try:
         # Logging Parameters
         log_cv_iterations=10,
         log_train_iterations=10,
-        train_loss_alpha=0.1
+        train_loss_alpha=0.1,
+
+        context_length=10 # For the model
     )
 except ValidationError as e:
     print(f"Validation error: {e.errors()}")
 
 
-def get_cv_loss(model: nn.Module, val_set: npt.ArrayLike, iterations: int = 10):
+def get_cv_loss(model: nn.Module, val_set: npt.ArrayLike, batch_size: int, context_length: int, device:torch.device, iterations: int = 10):
     loss_total = 0
     for _ in range(iterations):
-        X_cv, y_cv = get_batch(val_set)
+        X_cv, y_cv = get_batch(val_set, batch_size, context_length, device)
         logits = model(X_cv)
         loss_total += cross_entropy_loss(logits, y_cv).item()
     return loss_total / iterations
@@ -100,17 +102,21 @@ def train(model: nn.Module, train_args: TrainingArgs, run: wandb.Run):
     train_set = np.memmap(train_args.train_path, np.uint16, 'r')
     val_set = np.memmap(train_args.cv_path, np.uint16, 'r')
     iterations, checkpoint_freq = train_args.iterations, train_args.checkpoint_freq
-    log_cv_iterations, log_train_iterations = train_args.log_cv_iterations, train_args.log_loss_iterations
+    log_cv_iterations, log_train_iterations = train_args.log_cv_iterations, train_args.log_train_iterations
     best_cv = float('inf')
     running_loss = 0
+    batch_size = train_args.batch_size
+    context_length = train_args.context_length
+    device = train_args.device
     alpha = train_args.train_loss_alpha
-    grad_clip = True if train_args.max_l2_norm else False
+    max_l2_norm = train_args.max_l2_norm if train_args.max_l2_norm else False
+    print(device)
+    print(f"Model has {sum(param.nelement() for param in model.parameters())} parameters")
 
     for i in range(iterations):
-        print(f"Starting iteration {i + current_iter}")
 
         # Forward pass
-        X, y = get_batch(train_set)
+        X, y = get_batch(train_set, batch_size, context_length, device)
         logits = model(X)
         loss = cross_entropy_loss(logits, y)
         running_loss = alpha * running_loss + (1 - alpha) * loss.item()
@@ -119,7 +125,7 @@ def train(model: nn.Module, train_args: TrainingArgs, run: wandb.Run):
         optimizer.zero_grad()
 
         # lr scheduling
-        for param_group in optimizer.param_groups():
+        for param_group in optimizer.param_groups:
             param_group['lr'] = lr_cosine_scheduling(t=current_iter + i,
                                                      lr_max=train_args.lr_max,
                                                      lr_min=train_args.lr_min,
@@ -130,46 +136,43 @@ def train(model: nn.Module, train_args: TrainingArgs, run: wandb.Run):
         loss.backward()
 
         # Gradient clipping
-        if grad_clip:
-            gradient_clipping(model.parameters())
+        if max_l2_norm:
+            gradient_clipping(model.parameters(), max_l2_norm)
 
         # Parameter update
         optimizer.step()
 
         # Logging statistics
-        if i + current_iter % log_cv_iterations == 0:
+        if i % log_cv_iterations == 0:
             model.eval()
             with torch.no_grad():
-                cv_loss = get_cv_loss(model, val_set).item()
+                cv_loss = get_cv_loss(model, val_set, batch_size, context_length, device)
             print(f"CV loss at iteration {current_iter + i} is {cv_loss:.6f}")
             run.log({'cv_loss': cv_loss})
-            model.cache_idx = 0
+            best_cv = best_cv if best_cv >= cv_loss else cv_loss
+            model.cache_idx = 0 # reset the cache idx each time during training to not cache
             model.train()
 
-        if i + current_iter % log_train_iterations:
+        if i % log_train_iterations == 0:
+            print(f"Iteration {i}({i + current_iter}) / {iterations}")
+
             print(f"Training loss at iteration {current_iter + i} is {running_loss:.6f}")
             run.log({'train_loss': running_loss})
 
-        if checkpoint_freq % checkpoint_freq == 0:
+        if i % checkpoint_freq == 0:
             print(f"Checkpointing at iteration {current_iter + i}")
             save_checkpoint(model, optimizer, current_iter + i, train_args.save_path)
         
-        break
             
 
 
 def main(model_args: ModelArgs, train_args: TrainingArgs):
 
+    assert model_args.max_seq_len >= train_args.context_length
     transformer = TransformerLM(
-        vocab_size = model_args.vocab_size,
-        context_length = model_args.max_seq_len,
-        num_layers = model_args.num_layers,
-        num_heads = model_args.num_heads,
-        d_model = model_args.d_model,
-        d_ff = model_args.d_ff,
-        head_dim = model_args.head_dim,
-        rope_theta=model_args.rope_theta
+        model_args=model_args
     )
+    
 
     run = wandb.init(
         #entity = wandb_username,

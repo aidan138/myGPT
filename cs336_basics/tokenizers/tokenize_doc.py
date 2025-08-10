@@ -4,7 +4,7 @@ import time
 from cs336_basics.tokenizers.pretokenization_example import find_chunk_boundaries
 import os
 
-data_set_idx = 0
+data_set_idx = 1
 
 def main():
     tokenizer = PretrainedTokenizer.from_files(
@@ -13,12 +13,12 @@ def main():
         ['<|endoftext|>']
     )
 
-    datasets = [r'data\TinyStoriesV2-GPT4-train.txt', r'data\owt_train.txt']
+    datasets = [r'data\TinyStoriesV2-GPT4-train.txt', r'data\TinyStoriesV2-GPT4-valid.txt', r'data\owt_train.txt']
     dataset_path = datasets[data_set_idx]
     save_path = dataset_path.replace(".txt",'.npy')
     print(save_path)
     with open(dataset_path, 'rb') as f:
-        chunks = find_chunk_boundaries(f, 4, '<|endoftext|>'.encode('utf-8'))
+        chunks = find_chunk_boundaries(f, 1, '<|endoftext|>'.encode('utf-8'))
     
     print("Starting tokenization of document")
     start_time = time.perf_counter()

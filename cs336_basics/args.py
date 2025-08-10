@@ -39,6 +39,7 @@ class TrainingArgs(BaseModel):
     iterations: int
     checkpoint_freq: int
     batch_size: int
+    context_length: int
     save_path: str | Path
     train_path: str | Path
     cv_path: str | Path
@@ -71,7 +72,7 @@ class TrainingArgs(BaseModel):
 
     @model_validator(mode='after')
     def validate(self) -> "TrainingArgs":
-        assert self.iterations % self.checkpoint_freq, f"The checkpoint frequency ({self.checkpoint_freq}) must be divisible by the iterations ({self.iterations})"
+        assert self.iterations % self.checkpoint_freq == 0, f"The iterations ({self.iterations})  must be divisible by the checkpoint frequency ({self.checkpoint_freq})"
         if self.lr_min or self.warmup_iterations or self.cos_iterations:
             assert None not in [self.lr_min, self.warmup_iterations, self.cos_iterations], f"If using annealing lr_min ({self.lr_min}), \
                   warmup_iterations ({self.warmup_iterations}), and cos_iterations ({self.cos_iterations}) must be set"

@@ -108,16 +108,16 @@ class RoPE(nn.Module):
 
     def _compute_theta_mat(self, theta: float, d_k: int, max_seq_len: int, device: torch.device):
         angle_vals = [
-            i/(theta**(2*k/d_k)) for i in range(max_seq_len) for k in range(0, d_k//2)
+            i/(theta**(2*k/d_k)) for i in range(max_seq_len) for k in range(0, d_k//2) # 
         ]
-
+        #positions = torch.arange(max_seq_len, device=device)
         angle_vals = torch.Tensor(angle_vals).view((max_seq_len, d_k//2, -1)).to(device) # N, D/2, 1
         sin, cos = angle_vals.sin(), angle_vals.cos() # N, D/2, 1 for both
         return sin, cos
 
     def forward(self, x: Tensor, token_positions: torch.Tensor = None):
         *batch_dim, N, D = x.shape # Handle arbitrary batch dims
-        x = x.view((*batch_dim, N, D//2, 2)).unsqueeze(-1) # B, N, D/2, 2, 1
+        x = x.view((*batch_dim, N, D//2, 2, 1)) # ..., N, D/2, 2, 1
         token_positions = token_positions if token_positions is not None else torch.arange(N, device=x.device)
         sin, cos = self.sin[token_positions], self.cos[token_positions]
 
@@ -128,8 +128,7 @@ class RoPE(nn.Module):
 
         for _ in batch_dim:
             R_mats = R_mats.unsqueeze(0) # 1*B, N, D/2, 2,2
-            
-        #print(R_mats.shape, x.shape)
+
         return (R_mats @ x).squeeze(-1).view(*batch_dim, N, D)
 
 class Multiheaded_Self_Attention(nn.Module):
@@ -187,7 +186,6 @@ class Parallel_Multiheaded_Self_Attention(nn.Module):
 
     def forward(self, x: Tensor, positional_embeddings: RoPE = None, start_pos:int = 0):
         batch_size, seq_len, d_model = x.shape
-        
         # Combined K,Q,V into a single KQV (3, num_head * head_dim, d_model) matrix reducing everything to a single matrix multiply
         # by leveraging broadcasting to perform serial actions
         # 1st permute performs the transpose of all the matrices
@@ -267,5 +265,6 @@ class TransformerLM(nn.Module):
             x = transformer(x, positional_embeddings=self.rope, start_pos=self.current_pos)
         x = self.ln(x)
         x = self.output_layer(x)
-        self.current_pos += seq_len
+        if not self.train:
+            self.current_pos += seq_len
         return x

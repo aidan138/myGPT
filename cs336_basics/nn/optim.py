@@ -50,9 +50,7 @@ class AdamW(Optimizer):
                 state = self.state[p]
                 m, v, t = state.get('m', torch.zeros_like(grad)), state.get('v', torch.zeros_like(grad)), state.get('t', 1)
                 m = b1 * m + (1 - b1) * grad
-                # print(grad.shape)
                 v = b2 * v + (1-b2) * grad**2
-                # print(v)
                 lr_t = lr * math.sqrt(1-b2**t)/(1-b1**t)
                 p.data -= lr_t * m/(torch.sqrt(v) + epsilon)
                 p.data -= lr*decay*p.data

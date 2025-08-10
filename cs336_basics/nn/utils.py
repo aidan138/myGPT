@@ -25,7 +25,7 @@ def cross_entropy_loss(logits: Tensor, targets: Tensor):
     # logits can be [... , N, V]
     # targets are [..., N]
     logits = logits - logits.max(dim=-1, keepdim=True).values # Subtract for numerical stability
-    targ_logits = torch.gather(logits, dim=-1, index=targets.unsqueeze(-1))
+    targ_logits = torch.gather(logits, dim=-1, index=targets.unsqueeze(-1).long())
     prob_sum = logits.exp().sum(dim=-1, keepdim=True).log()
     return (prob_sum - targ_logits).mean()
 

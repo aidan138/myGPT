@@ -3,7 +3,7 @@ import torch.nn as nn
 from os import PathLike
 from typing import BinaryIO
 import numpy.typing as npt
-
+import numpy as np
 
 def save_checkpoint(model: nn.Module, optimizer: torch.optim.Optimizer, iteration: int, out: str | PathLike | BinaryIO):
 
@@ -24,7 +24,8 @@ def load_checkpoint(src, model: nn.Module, optimizer: torch.optim.Optimizer):
 
 def get_batch(dataset: npt.NDArray, batch_size, context_length, device):
     dataset = torch.from_numpy(dataset).to(device)
-    document_length = dataset.shape[0] # Document length    
-    choices = torch.randint(low=0, high=document_length-context_length, size=(batch_size,)) # Make 32 random choices from the document
-    X, y = torch.stack([dataset[i: i+context_length] for i in choices], dim=0).to(device), torch.stack([dataset[i+1: i+context_length+1] for i in choices]).to(device)
-    return (X, y)
+    dataset_len = dataset.shape[0] # Document length    
+    idxs = np.random.randint(0, dataset_len-context_length, size=batch_size)
+    X = torch.Tensor(np.stack([dataset[i: i+context_length] for i in idxs], axis=0), device=device).int()
+    y = torch.Tensor(np.stack([dataset[i+1: i+context_length+1] for i in idxs], axis=0),device=device).long()
+    return X, y
