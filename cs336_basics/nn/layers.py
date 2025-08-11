@@ -12,7 +12,7 @@ class Linear(nn.Module):
         super().__init__()
 
         dtype = torch.float32 if dtype is None else dtype
-        weight_stdv = math.sqrt(in_features + output_features)
+        weight_stdv = math.sqrt(2/ (in_features + output_features))
         weights = nn.init.trunc_normal_(
             torch.zeros((output_features, in_features)),
             0, # Mean
@@ -230,10 +230,11 @@ class Transformer_Block(nn.Module):
 
     def __init__(self, model_args):
         super().__init__()
-
+        d_ff = model_args.d_ff if model_args.d_ff is not None else int(4 * 2/3 * model_args.d_model) # Based on convention for GLUs
         self.attn = Parallel_Multiheaded_Self_Attention(model_args)
         self.ln1 = RMSNorm(model_args.d_model)
-        self.ffn = SwiGLU_Feedforward(model_args.d_model, model_args.d_ff)
+
+        self.ffn = SwiGLU_Feedforward(model_args.d_model, d_ff)
         self.ln2 = RMSNorm(model_args.d_model)
     
     def forward(self, x: Tensor, start_pos: int = 0, positional_embeddings: RoPE | None = None):
@@ -247,7 +248,6 @@ class TransformerLM(nn.Module):
     def __init__(self, model_args):
         super().__init__()
         d_model = model_args.d_model if model_args.d_model is not None else 128 * model_args.num_layers
-        d_ff = model_args.d_ff if model_args.d_ff is not None else int(4 * 2/3 * d_model) # Based on convention for GLUs
         num_heads = model_args.num_heads
         head_dim = model_args.head_dim if model_args.head_dim is not None else d_model // num_heads
         vocab_size = model_args.vocab_size

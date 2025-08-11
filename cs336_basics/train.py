@@ -12,6 +12,7 @@ from pydantic import ValidationError
 import time
 from dotenv import load_dotenv
 import os
+from torch.nn.functional import cross_entropy 
 
 load_dotenv()
 #wandb_username = os.getenv('WANDBUSERNAME')
@@ -23,9 +24,9 @@ project_name = os.getenv('WANDBPROJECTNAME')
 try:
     model_args = ModelArgs(
         # LM config
-        d_model=128,
+        d_model=64,
         vocab_size=10000,
-        d_ff=256,
+        #d_ff=256,
         rope_theta=10000,
         
         # Attention config
@@ -44,8 +45,8 @@ try:
 
     train_args = TrainingArgs(
         # Train Loop
-        iterations=1000,
-        checkpoint_freq=100,
+        iterations=1200,
+        checkpoint_freq=200,
         batch_size=32,
         device='cuda' if torch.cuda.is_available() else 'cpu',
         dtype=torch.float32,
@@ -55,7 +56,7 @@ try:
         load_path=None,
 
         # Optimizer
-        lr_max=1.0,
+        lr_max=.1,
         weight_decay=0.01,
 
         # Learning rate scheduler
@@ -71,7 +72,7 @@ try:
         log_train_iterations=10,
         train_loss_alpha=0.1,
 
-        context_length=10 # For the model
+        context_length=128 # For the model
     )
 except ValidationError as e:
     print(f"Validation error: {e.errors()}")
@@ -86,7 +87,7 @@ def get_cv_loss(model: nn.Module, val_set: npt.ArrayLike, batch_size: int, conte
     return loss_total / iterations
 
 
-def train(model: nn.Module, train_args: TrainingArgs, run: wandb.Run):
+def train(model: nn.Module, train_args: TrainingArgs, run: wandb.Run = None):
     
     optimizer = AdamW(
         params = model.parameters(),
@@ -112,7 +113,8 @@ def train(model: nn.Module, train_args: TrainingArgs, run: wandb.Run):
     max_l2_norm = train_args.max_l2_norm if train_args.max_l2_norm else False
     print(device)
     print(f"Model has {sum(param.nelement() for param in model.parameters())} parameters")
-
+    model.to(device)
+    
     for i in range(iterations):
 
         # Forward pass
@@ -167,6 +169,13 @@ def train(model: nn.Module, train_args: TrainingArgs, run: wandb.Run):
 
 
 def main(model_args: ModelArgs, train_args: TrainingArgs):
+    
+    # Set the random seeds
+    seed = 32
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)  # for multi-GPU
 
     assert model_args.max_seq_len >= train_args.context_length
     transformer = TransformerLM(
@@ -175,14 +184,16 @@ def main(model_args: ModelArgs, train_args: TrainingArgs):
     
 
     run = wandb.init(
-        #entity = wandb_username,
         project = project_name,
         config = {'training': train_args.model_dump(), 'model': model_args.model_dump()}
     )
 
     print(f"Starting training")
     start_time = time.perf_counter()
-    train(transformer, train_args, run)
+    train(transformer,
+          train_args,
+          run
+          )
     end_time = time.perf_counter()
 
     total_duration = end_time - start_time
@@ -195,6 +206,5 @@ def main(model_args: ModelArgs, train_args: TrainingArgs):
 
 
 if __name__ == '__main__':
-    torch.randn(1,1).to(train_args.dtype)
     assert model_args.max_batch_size >= train_args.batch_size
     main(model_args, train_args)

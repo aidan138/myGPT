@@ -23,9 +23,9 @@ def load_checkpoint(src, model: nn.Module, optimizer: torch.optim.Optimizer):
     return state_dict['Iteration']
 
 def get_batch(dataset: npt.NDArray, batch_size, context_length, device):
-    dataset = torch.from_numpy(dataset).to(device)
+    #dataset = torch.from_numpy(dataset).to(device)
     dataset_len = dataset.shape[0] # Document length    
     idxs = np.random.randint(0, dataset_len-context_length, size=batch_size)
-    X = torch.Tensor(np.stack([dataset[i: i+context_length] for i in idxs], axis=0), device=device).int()
-    y = torch.Tensor(np.stack([dataset[i+1: i+context_length+1] for i in idxs], axis=0),device=device).long()
+    X = torch.Tensor(np.stack([dataset[i: i+context_length] for i in idxs], axis=0)).cpu().to(device).int()
+    y = torch.Tensor(np.stack([dataset[i+1: i+context_length+1] for i in idxs], axis=0)).cpu().to(device).long()
     return X, y
