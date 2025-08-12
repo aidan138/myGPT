@@ -41,6 +41,7 @@ model_args = ModelArgs(
 def decode(model: TransformerLM, tokenizer: PretrainedTokenizer, prompt: str, max_tokens: int, temperature: float = 0, p_scale = .90):
 
     model.eval()
+    stop_seq = '<|endoftext|>'.encode('utf-8')
     with torch.no_grad():
         tokens = torch.Tensor(tokenizer.encode(prompt)).unsqueeze(0).int() # 1, N
 
@@ -65,8 +66,8 @@ def decode(model: TransformerLM, tokenizer: PretrainedTokenizer, prompt: str, ma
                 
                 idx = torch.multinomial(torch.Tensor([top_p]), num_samples=1)
                 next_token = top_idx[idx]
-
-            if next_token.item() in tokenizer.spec_tok_cache:
+                
+            if tokenizer.vocab[next_token.item()] == stop_seq:
                 break
             tokens = torch.cat([tokens, next_token.unsqueeze(0)], dim=-1)
             
@@ -81,7 +82,7 @@ def main():
     optim = AdamW(lm.parameters())
     tokenizer = PretrainedTokenizer.from_files(*tiny_stories_files)
     load_checkpoint(model_checkpoint, lm, optim)
-    output = decode(lm, tokenizer,'H', 100, .5)
+    output = decode(lm, tokenizer,'Hello World!', 100, .5)
     print(output)
     return
 
