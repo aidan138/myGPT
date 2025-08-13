@@ -1,7 +1,12 @@
 import torch
+import sys
+from pathlib import Path
+
+# Ensure project root is on sys.path
+sys.path.append(str(Path(__file__).resolve().parents[1]))
 import torch.nn as nn
-from cs336_basics.nn.layers import TransformerLM
-from cs336_basics.args import ModelArgs, TrainingArgs
+from nn.layers import TransformerLM
+from args import ModelArgs, TrainingArgs
 from cs336_basics.nn.optim import AdamW
 from cs336_basics.nn.utils import cross_entropy_loss, gradient_clipping, lr_cosine_scheduling
 from cs336_basics.train_utils import load_checkpoint, save_checkpoint, get_batch
@@ -12,7 +17,6 @@ from pydantic import ValidationError
 import time
 from dotenv import load_dotenv
 import os
-from torch.nn.functional import cross_entropy 
 
 load_dotenv()
 #wandb_username = os.getenv('WANDBUSERNAME')
@@ -45,31 +49,32 @@ try:
 
     train_args = TrainingArgs(
         # Train Loop
-        iterations=500,
+        iterations=iterations,
         checkpoint_freq=5000,
         batch_size=32,
         device='cuda' if torch.cuda.is_available() else 'cpu',
         dtype=torch.float32,
-        save_path=r'models\test_checkpoint.pt',
+        save_path=r'models\first_run.pt',
         train_path=r'data\TinyStoriesV2-GPT4-train.npy',
         cv_path=r'data\TinyStoriesV2-GPT4-valid.npy',
-        load_path=None,
+        load_path=r'models\first_run.pt',
 
         # Optimizer
-        lr_max=3e-4,
+        lr_max=1.4e-3,
         weight_decay=0.1,
+        betas=(0.9,0.95),
 
         # Learning rate scheduler
-        # lr_min=3e-4,
-        # warmup_iterations=200,
-        # cos_iterations=800,
+        lr_min=1.4e-4,
+        warmup_iterations=500,
+        cos_iterations=iterations-1500, # Perform 1000 iterations at mins
 
         # Gradient Clipping
-        # max_l2_norm=1.0,
+        max_l2_norm=1.0,
 
         # Logging Parameters
         log_cv_iterations=10000,
-        log_train_iterations=10,
+        log_train_iterations=100,
         train_loss_alpha=0.1,
 
         context_length=context_length # For the model
@@ -78,13 +83,21 @@ except ValidationError as e:
     print(f"Validation error: {e.errors()}")
 
 
-def get_cv_loss(model: nn.Module, val_set: npt.ArrayLike, batch_size: int, context_length: int, device:torch.device, iterations: int = 10):
+def get_cv_loss(model: nn.Module, val_set: npt.ArrayLike, batch_size: int, context_length: int, device:torch.device):
     loss_total = 0
-    for _ in range(iterations):
-        X_cv, y_cv = get_batch(val_set, batch_size, context_length, device)
+    n = 0
+    # Evaluate over the entire validation set in batches
+    for i in range(0, len(val_set)-(context_length+1) * batch_size, batch_size*context_length):
+        X_cv, y_cv = get_batch(val_set[i : i+batch_size*context_length+1],
+                               batch_size,
+                               context_length,
+                               device)
         logits = model(X_cv)
         loss_total += cross_entropy_loss(logits, y_cv).item()
-    return loss_total / iterations
+        n+= y_cv.size(0)
+        model.current_pos = 0
+        
+    return loss_total / n
 
 
 def train(model: nn.Module, train_args: TrainingArgs, run: wandb.Run = None):
@@ -98,10 +111,11 @@ def train(model: nn.Module, train_args: TrainingArgs, run: wandb.Run = None):
 
     # Reload the provided checkpoint
     current_iter = 0 if train_args.load_path is None else load_checkpoint(train_args.load_path, model, optimizer)
+    print(f"Model initialized on iteration {current_iter}")
 
     # mmep the file into memory for lazy batching
-    train_set = np.memmap(train_args.train_path, np.uint16, 'r')
-    val_set = np.memmap(train_args.cv_path, np.uint16, 'r')
+    train_set = np.load(train_args.train_path, mmap_mode='r')
+    val_set = np.load(train_args.cv_path, mmap_mode='r')
     iterations, checkpoint_freq = train_args.iterations, train_args.checkpoint_freq
     log_cv_iterations, log_train_iterations = train_args.log_cv_iterations, train_args.log_train_iterations
     best_cv = float('inf')
@@ -114,12 +128,11 @@ def train(model: nn.Module, train_args: TrainingArgs, run: wandb.Run = None):
     model.to(device)
     print(f"Model is on device: {device}")
 
-    X, y = get_batch(train_set, batch_size, context_length, device)
-
     start_time = time.perf_counter()
     for i in range(iterations):
-
+        full_iters = i + current_iter
         # Forward pass
+        X, y = get_batch(train_set, batch_size, context_length, device)
         logits = model(X)
         loss = cross_entropy_loss(logits, y)
         running_loss = alpha * running_loss + (1 - alpha) * loss.item()
@@ -130,7 +143,7 @@ def train(model: nn.Module, train_args: TrainingArgs, run: wandb.Run = None):
         # lr scheduling
         if train_args.lr_min:
             for param_group in optimizer.param_groups:
-                param_group['lr'] = lr_cosine_scheduling(t=current_iter + i,
+                param_group['lr'] = lr_cosine_scheduling(t=full_iters,
                                                         lr_max=train_args.lr_max,
                                                         lr_min=train_args.lr_min,
                                                         t_w=train_args.warmup_iterations,
@@ -146,26 +159,29 @@ def train(model: nn.Module, train_args: TrainingArgs, run: wandb.Run = None):
         # Parameter update
         optimizer.step()
 
+
+        if i % checkpoint_freq == 0 and i != 0:
+            print(f"Checkpointing at iteration {full_iters}")
+            save_checkpoint(model, optimizer, full_iters, train_args.save_path)
+
         # Logging statistics
-        if i % log_cv_iterations == 0:
+        if i!= 0 and full_iters % log_cv_iterations == 0:
             model.eval()
             with torch.no_grad():
                 cv_loss = get_cv_loss(model, val_set, batch_size, context_length, device)
-            print(f"CV loss at iteration {current_iter + i} is {cv_loss:.6f}")
-            run.log({'CV Loss': cv_loss, 'Step': current_iter + i, 'Clock Time': time.perf_counter() - start_time})
+            print(f"CV loss at iteration {full_iters} is {cv_loss:.6f}")
+            if run:
+                run.log({'CV Loss': cv_loss, 'Step': full_iters, 'Clock Time': time.perf_counter() - start_time})
             best_cv = best_cv if best_cv >= cv_loss else cv_loss
-            model.cache_idx = 0 # reset the cache idx each time during training to not cache
+            model.current_pos = 0 # reset the cache idx each time during training to not cache
             model.train()
 
         if i % log_train_iterations == 0:
-            print(f"Iteration {i}({i + current_iter}) / {iterations}")
+            print(f"Iteration {i}({full_iters}) / {iterations}")
 
-            print(f"Training loss at iteration {current_iter + i} is {running_loss:.6f}")
-            run.log({'Train Loss': running_loss, 'Step': current_iter + i, 'Clock Time': time.perf_counter() - start_time})
-
-        if i % checkpoint_freq == 0 and i != 0:
-            print(f"Checkpointing at iteration {current_iter + i}")
-            save_checkpoint(model, optimizer, current_iter + i, train_args.save_path)
+            print(f"Training loss at iteration {full_iters} is {running_loss:.6f}")
+            if run:
+                run.log({'Train Loss': running_loss, 'Step': full_iters, 'Clock Time': time.perf_counter() - start_time})      
 
     end_time = time.perf_counter()
 
@@ -187,24 +203,24 @@ def main(model_args: ModelArgs, train_args: TrainingArgs):
     torch.manual_seed(seed)
     np.random.seed(seed)
     torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)  # for multi-GPU
-
+    torch.cuda.manual_seed_all(seed)  # for multi-GPU    
     assert model_args.max_seq_len >= train_args.context_length
     transformer = TransformerLM(
         model_args=model_args
     )
     print(f'Total number of parameters: {sum([param.nelement() for param in transformer.parameters()])}')
 
-    run = wandb.init(
-        project = project_name,
-        config = {'training': train_args.model_dump(), 'model': model_args.model_dump()}
-    )
+    # run = wandb.init(
+    #     project = project_name,
+    #     config = {'training': train_args.model_dump(), 'model': model_args.model_dump()},
+    #     reinit='create_new'
+    # )
 
     print(f"Starting training")
     train(transformer,
-          train_args,
-          run
-          )
+            train_args,
+            #run
+            )
 
 if __name__ == '__main__':
     assert model_args.max_batch_size >= train_args.batch_size

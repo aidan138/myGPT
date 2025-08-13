@@ -24,8 +24,14 @@ def load_checkpoint(src, model: nn.Module, optimizer: torch.optim.Optimizer):
 
 def get_batch(dataset: npt.NDArray, batch_size, context_length, device):
     #dataset = torch.from_numpy(dataset).to(device)
+    
     dataset_len = dataset.shape[0] # Document length
-    idxs = np.arange(0, batch_size)
+    if dataset_len < context_length + 1:
+        raise ValueError(
+            f"Dataset slice too short: length {dataset_len}, needs {context_length+1}"
+        )
+    #idxs = np.arange(0, batch_size)
+    idxs = np.random.randint(0, dataset_len-context_length-1, batch_size)
     X = torch.Tensor(np.stack([dataset[i: i+context_length] for i in idxs], axis=0)).cpu().to(device).int()
     y = torch.Tensor(np.stack([dataset[i+1: i+context_length+1] for i in idxs], axis=0)).cpu().to(device).long()
     return X, y

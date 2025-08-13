@@ -71,7 +71,6 @@ def decode(model: TransformerLM, tokenizer: PretrainedTokenizer, prompt: str, ma
                 break
             tokens = torch.cat([tokens, next_token.unsqueeze(0)], dim=-1)
             
-    print(tokens[0,:].tolist())
     response = tokenizer.decode(tokens[0,:].tolist())
     return response
             
