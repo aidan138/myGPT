@@ -1,7 +1,7 @@
 import torch
 from torch import nn, Tensor
 import math
-from cs336_basics.nn.utils import sdp_attention
+from cs336_basics.nn.utils import softmax
 from cs336_basics.args import ModelArgs
 
 class Linear(nn.Module):
@@ -131,6 +131,18 @@ class RoPE(nn.Module):
 
         return (R_mats @ x).squeeze(-1).view(*batch_dim, N, D)
 
+def sdp_attention(Q: Tensor, K: Tensor, V: Tensor, mask: Tensor | None = None):
+    batch, *rest, seq_len, feat_dim = Q.shape # 
+    # Note works for a two different sequence lengths
+    # Therefore you can decide to determine attention attending from two diff sequences
+    # For a autoregressive SA it will always be same source though
+    sim_matrix = Q @ K.transpose(-2,-1)/math.sqrt(feat_dim) # (B, *rest, N, D) @ (B, *rest, D, M) -> (B, *rest, N, M)
+    if mask is not None:
+        sim_matrix = torch.where(condition=mask, input=sim_matrix, other=float('-inf'))
+    prob_matrix = softmax(sim_matrix, dim=-1)
+    
+    return  (prob_matrix @ V).view(batch, *rest, -1, feat_dim) # Returns B, ..., n, feat_dim
+
 class Multiheaded_Self_Attention(nn.Module):
 
     def __init__(self, d_model: int, num_heads: int, max_seq_length: int = 0, positional_embeddings: RoPE = None):
@@ -160,6 +172,7 @@ class Multiheaded_Self_Attention(nn.Module):
         attended = sdp_attention(query, key, value, mask = mask) # Apply attention -> num_heads, batch, seq_len, head_dim
         attended = attended.permute(1, 2, 0, 3).reshape(batch_size, seq_len, -1) # undo the permutation
         return self.output_proj(attended).view(batch_size, seq_len, d_model)
+
 
 
 class Parallel_Multiheaded_Self_Attention(nn.Module):

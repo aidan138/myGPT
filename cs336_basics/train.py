@@ -22,10 +22,14 @@ load_dotenv()
 #wandb_username = os.getenv('WANDBUSERNAME')
 project_name = os.getenv('WANDBPROJECTNAME')
 total_tokens_processed = 327680000
-batch_size = 32
+batch_size = 16
 context_length = 256
 
-iterations = (total_tokens_processed) // (batch_size*context_length) + 1
+iterations = total_tokens_processed // (batch_size*context_length) + 1
+warmup_iters = int(0.0125 * iterations)
+cos_iters = iterations - warmup_iters -1000
+
+
 # Current args
 # See args.py for more options
 try:
@@ -41,7 +45,7 @@ try:
         num_heads=16,
 
         # Inference time parameters
-        max_batch_size=32,
+        max_batch_size=batch_size,
         max_seq_len=context_length, # Consideration for inference time
     )
 
@@ -50,31 +54,31 @@ try:
     train_args = TrainingArgs(
         # Train Loop
         iterations=iterations,
-        checkpoint_freq=5000,
-        batch_size=32,
+        checkpoint_freq=1000,
+        batch_size=batch_size,
         device='cuda' if torch.cuda.is_available() else 'cpu',
         dtype=torch.float32,
-        save_path=r'models\first_run.pt',
+        save_path=r'models\Larger_lr.pt',
         train_path=r'data\TinyStoriesV2-GPT4-train.npy',
         cv_path=r'data\TinyStoriesV2-GPT4-valid.npy',
-        load_path=r'models\first_run.pt',
+        load_path=None,
 
         # Optimizer
-        lr_max=1.4e-3,
+        lr_max=1.4e-3 * .5, # Best is 1.4e-3 at batch size of 32
         weight_decay=0.1,
         betas=(0.9,0.95),
 
         # Learning rate scheduler
-        lr_min=1.4e-4,
-        warmup_iterations=500,
-        cos_iterations=iterations-1500, # Perform 1000 iterations at mins
+        lr_min=1.4e-4 * .5,
+        warmup_iterations=warmup_iters,
+        cos_iterations=cos_iters, # Perform 1000 iterations at mins
 
         # Gradient Clipping
         max_l2_norm=1.0,
 
         # Logging Parameters
-        log_cv_iterations=10000,
-        log_train_iterations=100,
+        log_cv_iterations=5000,
+        log_train_iterations=10,
         train_loss_alpha=0.1,
 
         context_length=context_length # For the model
@@ -94,7 +98,7 @@ def get_cv_loss(model: nn.Module, val_set: npt.ArrayLike, batch_size: int, conte
                                device)
         logits = model(X_cv)
         loss_total += cross_entropy_loss(logits, y_cv).item()
-        n+= y_cv.size(0)
+        n+= 1
         model.current_pos = 0
         
     return loss_total / n
@@ -125,9 +129,17 @@ def train(model: nn.Module, train_args: TrainingArgs, run: wandb.Run = None):
     device = train_args.device
     alpha = train_args.train_loss_alpha
     max_l2_norm = train_args.max_l2_norm if train_args.max_l2_norm else False
+
+    # For loading optimizer from checkpointing
+    for state in optimizer.state.values():
+        for k, v in state.items():
+            if isinstance(v, torch.Tensor):
+                state[k] = v.to(device)
+
     model.to(device)
     print(f"Model is on device: {device}")
 
+    iterations -= current_iter
     start_time = time.perf_counter()
     for i in range(iterations):
         full_iters = i + current_iter
@@ -160,7 +172,7 @@ def train(model: nn.Module, train_args: TrainingArgs, run: wandb.Run = None):
         optimizer.step()
 
 
-        if i % checkpoint_freq == 0 and i != 0:
+        if i != 0 and i % checkpoint_freq == 0:
             print(f"Checkpointing at iteration {full_iters}")
             save_checkpoint(model, optimizer, full_iters, train_args.save_path)
 
@@ -177,11 +189,13 @@ def train(model: nn.Module, train_args: TrainingArgs, run: wandb.Run = None):
             model.train()
 
         if i % log_train_iterations == 0:
+            iter_end = time.perf_counter()
             print(f"Iteration {i}({full_iters}) / {iterations}")
 
             print(f"Training loss at iteration {full_iters} is {running_loss:.6f}")
             if run:
-                run.log({'Train Loss': running_loss, 'Step': full_iters, 'Clock Time': time.perf_counter() - start_time})      
+                run.log({'Train Loss': running_loss, 'Step': full_iters, 'Clock Time': time.perf_counter() - start_time})
+            iter_start = time.perf_counter()   
 
     end_time = time.perf_counter()
 
@@ -192,6 +206,9 @@ def train(model: nn.Module, train_args: TrainingArgs, run: wandb.Run = None):
     mins = secs // 60
     secs -= mins * 60
     print(f"Finished training\nTraining took {hours} hour(s) {mins} minutes and {secs:.2f} seconds")
+    print(f"Final loss was {running_loss:.6f}")
+    run.log({'Train Loss': running_loss, 'Step': full_iters, 'Clock Time': end_time - start_time})      
+
         
             
 
@@ -210,16 +227,17 @@ def main(model_args: ModelArgs, train_args: TrainingArgs):
     )
     print(f'Total number of parameters: {sum([param.nelement() for param in transformer.parameters()])}')
 
-    # run = wandb.init(
-    #     project = project_name,
-    #     config = {'training': train_args.model_dump(), 'model': model_args.model_dump()},
-    #     reinit='create_new'
-    # )
+
+    run = wandb.init(
+        project = project_name,
+        config = {'training': train_args.model_dump(), 'model': model_args.model_dump()},
+        
+    )
 
     print(f"Starting training")
     train(transformer,
             train_args,
-            #run
+            run
             )
 
 if __name__ == '__main__':

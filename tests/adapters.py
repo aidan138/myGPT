@@ -10,9 +10,9 @@ import torch
 from torch import Tensor
 from cs336_basics.tokenizers.bpe_trainer import train_bpe
 from cs336_basics.tokenizers.pretrained_tokenizer import PretrainedTokenizer
-from cs336_basics.nn.layers import Linear, Embedding, RMSNorm, silu, SwiGLU_Feedforward, RoPE,\
+from cs336_basics.nn.layers import Linear, Embedding, RMSNorm, silu, sdp_attention, SwiGLU_Feedforward, RoPE,\
     Multiheaded_Self_Attention, Parallel_Multiheaded_Self_Attention, Transformer_Block, TransformerLM
-from cs336_basics.nn.utils import softmax, sdp_attention, cross_entropy_loss, lr_cosine_scheduling, gradient_clipping
+from cs336_basics.nn.utils import softmax, cross_entropy_loss, lr_cosine_scheduling, gradient_clipping
 from cs336_basics.nn.optim import AdamW
 from cs336_basics.train_utils import get_batch, save_checkpoint, load_checkpoint
 from cs336_basics.args import ModelArgs

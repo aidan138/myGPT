@@ -19,21 +19,22 @@ tiny_stories_files = [
         ['<|endoftext|>']
     ]
 
-model_checkpoint = r"models\test_checkpoint.pt"
+model_checkpoint = r"models\first_run.pt"
 
 model_args = ModelArgs(
         # LM config
-        d_model=64,
+        d_model=512,
+        d_ff=1344,
         vocab_size=10000,
         rope_theta=10000,
         
         # Attention config
-        num_layers=12,
-        num_heads=32,
+        num_layers=4,
+        num_heads=16,
 
         # Inference time parameters
         max_batch_size=32,
-        max_seq_len=256, # Will be used at train as well but should be scaled down considerably
+        max_seq_len=256,
 )
 
 
@@ -81,7 +82,7 @@ def main():
     optim = AdamW(lm.parameters())
     tokenizer = PretrainedTokenizer.from_files(*tiny_stories_files)
     load_checkpoint(model_checkpoint, lm, optim)
-    output = decode(lm, tokenizer,'Hello World!', 100, .5)
+    output = decode(lm, tokenizer,"""Once upon a time""", 5000, .5)
     print(output)
     return
 
