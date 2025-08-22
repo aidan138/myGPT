@@ -54,7 +54,6 @@ class RMSNorm(nn.Module):
     def __init__(self, d_model: int, epsilon: float=1e-5, device = None, dtype= None):
         super().__init__()
         dtype = torch.float32 if dtype is None else dtype
-        # TODO Look into if they use running mean
         self.gain = nn.Parameter(torch.ones(d_model))
         self.epsilon = epsilon
 
@@ -168,7 +167,7 @@ class Multiheaded_Self_Attention(nn.Module):
             query = self.RoPE(query, token_positions)
             key = self.RoPE(key, token_positions)
         mask_shape = (*query.shape[:-1], key.shape[-2]) # ..., N, M
-        mask = torch.full(mask_shape, True).tril()
+        mask = torch.full(mask_shape, True, device=x.device).tril()
         attended = sdp_attention(query, key, value, mask = mask) # Apply attention -> num_heads, batch, seq_len, head_dim
         attended = attended.permute(1, 2, 0, 3).reshape(batch_size, seq_len, -1) # undo the permutation
         return self.output_proj(attended).view(batch_size, seq_len, d_model)
@@ -212,8 +211,8 @@ class Parallel_Multiheaded_Self_Attention(nn.Module):
         # We then view for batch_size, seq_len, num_heads, head_dim
         # Finally permute the head dim to the front so that you are processing all heads in parallel as if separate modules
         query = transformed[0].reshape(batch_size, seq_len, self.num_heads, -1).permute((2,0,1,3))
-        key = transformed[1].reshape(batch_size, seq_len, self.num_heads, -1).permute((2,0,1,3))
-        value = transformed[2].reshape(batch_size, seq_len, self.num_heads, -1).permute((2,0,1,3))
+        key = transformed[1].reshape(batch_size, seq_len, self.num_kv_heads, -1).permute((2,0,1,3))
+        value = transformed[2].reshape(batch_size, seq_len, self.num_kv_heads, -1).permute((2,0,1,3))
 
         last_pos = start_pos + seq_len
         token_positions = torch.arange(start_pos, last_pos)
@@ -251,9 +250,9 @@ class Transformer_Block(nn.Module):
         self.ln2 = RMSNorm(model_args.d_model)
     
     def forward(self, x: Tensor, start_pos: int = 0, positional_embeddings: RoPE | None = None):
-        attended_x = self.attn(self.ln1(x), positional_embeddings, start_pos)
+        attended_x = self.attn(x, positional_embeddings, start_pos)
         r_x = x + attended_x
-        ffn_x = self.ffn(self.ln2(r_x))
+        ffn_x = self.ffn(r_x)
         return ffn_x + r_x
         
 
@@ -276,8 +275,8 @@ class TransformerLM(nn.Module):
         x = self.embeddings(x)
         for transformer in self.transformer_blocks:
             x = transformer(x, positional_embeddings=self.rope, start_pos=self.current_pos)
-        x = self.ln(x)
+        #x = self.ln(x)
         x = self.output_layer(x)
-        if not self.train:
+        if not self.training:
             self.current_pos += seq_len
         return x
