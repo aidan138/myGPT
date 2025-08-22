@@ -17,10 +17,13 @@ from pydantic import ValidationError
 import time
 from dotenv import load_dotenv
 import os
+import argparse
 
 load_dotenv()
 #wandb_username = os.getenv('WANDBUSERNAME')
 project_name = os.getenv('WANDBPROJECTNAME')
+os.makedirs('model', exist_ok=True)
+
 total_tokens_processed = 327680000
 batch_size = 16
 context_length = 256
@@ -54,7 +57,7 @@ try:
     train_args = TrainingArgs(
         # Train Loop
         iterations=iterations,
-        checkpoint_freq=1000,
+        checkpoint_freq=int(1000 * 32/batch_size), # Save every 1000 iters at batch size of 32
         batch_size=batch_size,
         device='cuda' if torch.cuda.is_available() else 'cpu',
         dtype=torch.float32,
@@ -64,12 +67,12 @@ try:
         load_path=None,
 
         # Optimizer
-        lr_max=1.4e-3 * .5, # Best is 1.4e-3 at batch size of 32
+        lr_max=1.4e-3 * (batch_size/32), # Scale the lr based on batch size (Used 32 to find this value)
         weight_decay=0.1,
         betas=(0.9,0.95),
 
         # Learning rate scheduler
-        lr_min=1.4e-4 * .5,
+        lr_min=1.4e-4 * (batch_size/32),
         warmup_iterations=warmup_iters,
         cos_iterations=cos_iters, # Perform 1000 iterations at mins
 
@@ -77,7 +80,7 @@ try:
         max_l2_norm=1.0,
 
         # Logging Parameters
-        log_cv_iterations=5000,
+        log_cv_iterations=int(5000 * 32/batch_size),
         log_train_iterations=10,
         train_loss_alpha=0.1,
 
@@ -214,7 +217,9 @@ def train(model: nn.Module, train_args: TrainingArgs, run: wandb.Run = None):
 
 
 def main(model_args: ModelArgs, train_args: TrainingArgs):
-    
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--log', type=str, default=None, help='Type anything to enable logging to wandb')
+    args = parser.parse_args()
     # Set the random seeds
     seed = 32
     torch.manual_seed(seed)
@@ -227,12 +232,14 @@ def main(model_args: ModelArgs, train_args: TrainingArgs):
     )
     print(f'Total number of parameters: {sum([param.nelement() for param in transformer.parameters()])}')
 
-
-    run = wandb.init(
-        project = project_name,
-        config = {'training': train_args.model_dump(), 'model': model_args.model_dump()},
-        
-    )
+    if args.log:
+        run = wandb.init(
+            project = project_name,
+            config = {'training': train_args.model_dump(), 'model': model_args.model_dump()},
+            
+        )
+    else:
+        run = None
 
     print(f"Starting training")
     train(transformer,
