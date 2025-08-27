@@ -22,7 +22,7 @@ import argparse
 load_dotenv()
 #wandb_username = os.getenv('WANDBUSERNAME')
 project_name = os.getenv('WANDBPROJECTNAME')
-os.makedirs('model', exist_ok=True)
+os.makedirs('models', exist_ok=True)
 
 total_tokens_processed = 327680000
 batch_size = 16
