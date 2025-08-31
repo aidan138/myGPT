@@ -131,7 +131,8 @@ class RoPE(nn.Module):
         return (R_mats @ x).squeeze(-1).view(*batch_dim, N, D)
 
 def sdp_attention(Q: Tensor, K: Tensor, V: Tensor, mask: Tensor | None = None):
-    batch, *rest, seq_len, feat_dim = Q.shape # 
+    feat_dim = Q.shape[-1] # 
+    input_shape = Q.shape
     # Note works for a two different sequence lengths
     # Therefore you can decide to determine attention attending from two diff sequences
     # For a autoregressive SA it will always be same source though
@@ -140,7 +141,7 @@ def sdp_attention(Q: Tensor, K: Tensor, V: Tensor, mask: Tensor | None = None):
         sim_matrix = torch.where(condition=mask, input=sim_matrix, other=float('-inf'))
     prob_matrix = softmax(sim_matrix, dim=-1)
     
-    return  (prob_matrix @ V).view(batch, *rest, -1, feat_dim) # Returns B, ..., n, feat_dim
+    return  (prob_matrix @ V).view(input_shape) # Returns B, ..., n, feat_dim
 
 class Multiheaded_Self_Attention(nn.Module):
 
@@ -194,7 +195,6 @@ class Parallel_Multiheaded_Self_Attention(nn.Module):
     # KV cache init
     def _init_cache(self, max_bsz, device, dtype):
         if self.k_cache is None or self.k_cache.size(1) < max_bsz:
-            print((self.num_kv_heads, max_bsz, self.max_seq_len, self.head_dim))
             self.k_cache = torch.zeros(
                 (self.num_kv_heads, max_bsz, self.max_seq_len, self.head_dim), device=device, dtype=dtype
             )
