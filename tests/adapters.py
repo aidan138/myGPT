@@ -214,7 +214,7 @@ def run_multihead_self_attention_with_rope(
     )
     mha = Parallel_Multiheaded_Self_Attention(args)
     mha.output_proj.weight.data = o_proj_weight
-    mha.kqv_proj.data = torch.stack([q_proj_weight, k_proj_weight,v_proj_weight], dim=0)
+    mha.kqv_proj.weight.data = torch.concat([q_proj_weight, k_proj_weight,v_proj_weight], dim=0)
 
     return mha(in_features, positional_embeddings=rope)
 
@@ -315,8 +315,8 @@ def run_transformer_block(
     _, seq_len, _ = in_features.shape
     rope = RoPE(theta, d_model//num_heads, seq_len)
     transformer_block = Transformer_Block(d_model, num_heads, d_ff)
-    kqv_proj = torch.stack([weights['attn.q_proj.weight'], weights['attn.k_proj.weight'], weights['attn.v_proj.weight']])
-    transformer_block.attn.kqv_proj.data = kqv_proj
+    kqv_proj = torch.concat([weights['attn.q_proj.weight'], weights['attn.k_proj.weight'], weights['attn.v_proj.weight']])
+    transformer_block.attn.kqv_proj.weight.data = kqv_proj
     transformer_block.attn.output_proj.weight.data = weights['attn.output_proj.weight']
     transformer_block.ln1.gain.data = weights['ln1.weight']
     transformer_block.ln2.gain.data = weights['ln2.weight']
@@ -422,8 +422,8 @@ def run_transformer_lm(
     for i in range(num_layers):
         layer_name = f'layers.{i}.'
         block = Transformer_Block(model_args)
-        kqv_proj = torch.stack([weights[f'{layer_name}attn.q_proj.weight'], weights[f'{layer_name}attn.k_proj.weight'], weights[f'{layer_name}attn.v_proj.weight']], dim=0)
-        block.attn.kqv_proj.data = kqv_proj
+        kqv_proj = torch.concat([weights[f'{layer_name}attn.q_proj.weight'], weights[f'{layer_name}attn.k_proj.weight'], weights[f'{layer_name}attn.v_proj.weight']], dim=0)
+        block.attn.kqv_proj.weight.data= kqv_proj
         block.attn.output_proj.weight.data = weights[f'{layer_name}attn.output_proj.weight']
         block.ln1.gain.data = weights[f'{layer_name}ln1.weight']
         block.ln2.gain.data = weights[f'{layer_name}ln2.weight']
